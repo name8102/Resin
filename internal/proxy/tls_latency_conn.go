@@ -9,7 +9,8 @@ import (
 
 // tlsLatencyConn observes bounded TLS framing without terminating TLS or
 // retaining payloads. TLS latency requires bidirectional progress after the
-// ServerHello: a subsequent client flight followed by more upstream data.
+// ServerHello; a completed client handshake/encrypted record is sufficient,
+// since a valid TLS 1.3 preconnection need not receive any further server data.
 // This is not certificate verification or proof of a completed TLS handshake.
 type tlsLatencyConn struct {
 	net.Conn
@@ -22,6 +23,7 @@ type tlsLatencyConn struct {
 	clientPrefix, serverPrefix [6]byte
 	clientN, serverN           int
 	serverRecords              tlsRecordObserver
+	clientRecords              tlsRecordObserver
 	serverProgress             uint64
 	clientFlight               bool
 	handshakeComplete          bool
@@ -31,11 +33,12 @@ type tlsLatencyConn struct {
 // tlsRecordObserver skips payloads using their record lengths, so a payload
 // byte resembling an alert is never mistaken for a new record header.
 type tlsRecordObserver struct {
-	header    [5]byte
-	headerN   int
-	remaining int
-	alert     bool
-	invalid   bool
+	header          [5]byte
+	headerN         int
+	remaining       int
+	alert           bool
+	invalid         bool
+	handshakeRecord bool
 }
 
 func (o *tlsRecordObserver) observe(p []byte) (progress bool) {
@@ -43,6 +46,9 @@ func (o *tlsRecordObserver) observe(p []byte) (progress bool) {
 		if o.remaining > 0 {
 			n := min(o.remaining, len(p))
 			o.remaining -= n
+			if o.remaining == 0 && (o.header[0] == 22 || o.header[0] == 23) {
+				o.handshakeRecord = true
+			}
 			progress = true
 			p = p[n:]
 			continue
@@ -127,7 +133,8 @@ func (c *tlsLatencyConn) Write(p []byte) (int, error) {
 		c.clientFlight = true
 		// The peer may respond before the underlying Write returns. Count that
 		// read only after confirming that this client flight was actually sent.
-		if c.serverProgress > serverProgress {
+		c.clientRecords.observe(p[:n])
+		if c.serverProgress > serverProgress || (c.clientRecords.handshakeRecord && !c.clientRecords.invalid && !c.clientRecords.alert) {
 			valid = c.completeProgressLocked()
 		}
 	}

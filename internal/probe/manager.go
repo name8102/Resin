@@ -78,7 +78,8 @@ const (
 	defaultLatencyTestURL = "https://www.gstatic.com/generate_204"
 	defaultQueueCap       = 1024
 	// A malformed tiny latency window must not turn busy nodes into a probe loop.
-	minHotLatencyInterval = time.Minute
+	minHotLatencyInterval         = time.Minute
+	blacklistVerificationInterval = 5 * time.Minute
 )
 
 type probePriority uint8
@@ -458,7 +459,7 @@ func (m *ProbeManager) scanEgress() {
 			return true // disabled node -> skip periodic probe
 		}
 
-		if entry.Outbound.Load() == nil || entry.BlacklistUntil.Load() > now.UnixNano() {
+		if entry.Outbound.Load() == nil || entry.BlacklistUntil.Load() != 0 {
 			return true // unavailable or still quarantined
 		}
 
@@ -539,11 +540,18 @@ func (m *ProbeManager) runProbeWorker() {
 
 func (m *ProbeManager) executeTask(task probeTask) {
 	entry, ok := m.pool.GetEntry(task.key.hash)
-	if !ok || entry.Outbound.Load() == nil || entry.BlacklistUntil.Load() > time.Now().UnixNano() {
+	if !ok || entry.Outbound.Load() == nil {
 		return
 	}
 	if entry.IsDisabledBySubscriptions(m.pool.MakeSubLookup()) {
 		return
+	}
+	if entry.BlacklistUntil.Load() != 0 {
+		// Only the latency queue owns periodic recovery; do not duplicate it with
+		// queued egress work. Unlike user traffic, verification can test quarantine.
+		if task.key.kind != probeTaskKindLatency || !m.blacklistVerificationDue(entry, time.Now()) {
+			return
+		}
 	}
 
 	switch task.key.kind {
@@ -717,7 +725,7 @@ func (m *ProbeManager) isLatencyProbeDue(
 	lookahead time.Duration,
 ) bool {
 	if until := entry.BlacklistUntil.Load(); until != 0 {
-		return now.UnixNano() >= until // one active verification when quarantine ends
+		return m.blacklistVerificationDue(entry, now)
 	}
 
 	if m.latencyWindow != nil {
@@ -751,6 +759,42 @@ func (m *ProbeManager) isLatencyProbeDue(
 	}
 	authorityDeadline := time.Unix(0, lastAuthority).Add(maxAuthorityInterval).Add(-lookahead)
 	return !now.Before(authorityDeadline)
+}
+
+// blacklistVerificationDue keeps recovery independent of the long exclusion
+// deadline. Otherwise a transient failure can drain the entire routing pool.
+func (m *ProbeManager) blacklistVerificationDue(entry *node.NodeEntry, now time.Time) bool {
+	last := max(entry.LastLatencyProbeAttempt.Load(), entry.CircuitOpenSince.Load())
+	return last == 0 || !now.Before(time.Unix(0, last).Add(blacklistVerificationInterval))
+}
+
+// performRecoveryProbe requires successful HTTPS exchanges with two independent
+// sites. User traffic stays excluded until both pass; a single Google success
+// cannot immediately cancel a blacklist caused by another origin.
+func (m *ProbeManager) performRecoveryProbe(hash node.Hash, entry *node.NodeEntry) error {
+	until, failures := entry.BlacklistUntil.Load(), entry.FailureCount.Load()
+	m.pool.RecordLatency(hash, netutil.ExtractDomain(defaultLatencyTestURL), nil)
+	_, latency, err := m.fetcher(hash, defaultLatencyTestURL)
+	if err != nil {
+		m.pool.RecordResult(hash, false)
+		return err
+	}
+	m.pool.RecordLatency(hash, netutil.ExtractDomain(defaultLatencyTestURL), &latency)
+	body, latency, err := m.fetcher(hash, egressTraceURL)
+	if err != nil {
+		m.pool.RecordResult(hash, false)
+		return err
+	}
+	ip, loc, err := ParseCloudflareTrace(body)
+	if err != nil {
+		return err
+	}
+	m.pool.RecordLatency(hash, egressTraceDomain, &latency)
+	m.pool.UpdateNodeEgressIP(hash, &ip, loc)
+	if !m.pool.RecordRecoverySuccess(hash, until, failures) {
+		return fmt.Errorf("node health changed during recovery verification")
+	}
+	return nil
 }
 
 // probeEgress performs a single egress probe against a node via Cloudflare trace.
@@ -803,6 +847,12 @@ func (m *ProbeManager) probeLatency(hash node.Hash, entry *node.NodeEntry, testU
 }
 
 func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressProbeErrorStage, error) {
+	if entry, ok := m.pool.GetEntry(hash); ok && entry.BlacklistUntil.Load() != 0 {
+		if err := m.performRecoveryProbe(hash, entry); err != nil {
+			return netip.Addr{}, egressProbeFetchError, err
+		}
+		return entry.GetEgressIP(), egressProbeNoError, nil
+	}
 	body, latency, err := m.fetcher(hash, egressTraceURL)
 	if err != nil {
 		m.pool.RecordResult(hash, false)
@@ -825,6 +875,9 @@ func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressPro
 }
 
 func (m *ProbeManager) performLatencyProbe(hash node.Hash, testURL string) error {
+	if entry, ok := m.pool.GetEntry(hash); ok && entry.BlacklistUntil.Load() != 0 {
+		return m.performRecoveryProbe(hash, entry)
+	}
 	domain := netutil.ExtractDomain(testURL)
 	_, latency, err := m.fetcher(hash, testURL)
 	if err != nil {

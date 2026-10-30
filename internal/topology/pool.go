@@ -582,6 +582,30 @@ func (p *GlobalNodePool) recordHealthResult(hash node.Hash, success bool, active
 	}
 }
 
+// RecordRecoverySuccess accepts a two-site active verification even while a
+// quarantine deadline is pending. A changed failure snapshot invalidates the
+// result, so an old probe cannot erase a newer upstream failure.
+func (p *GlobalNodePool) RecordRecoverySuccess(hash node.Hash, until int64, failures int32) bool {
+	entry, ok := p.nodes.Load(hash)
+	if !ok || until == 0 {
+		return false
+	}
+	p.healthMu.Lock()
+	if entry.BlacklistUntil.Load() != until || entry.FailureCount.Load() != failures {
+		p.healthMu.Unlock()
+		return false
+	}
+	entry.BlacklistUntil.Store(0)
+	entry.FailureCount.Store(0)
+	entry.CircuitOpenSince.Store(0)
+	p.healthMu.Unlock()
+	p.notifyAllPlatformsDirty(hash)
+	if p.onNodeDynamicChanged != nil {
+		p.onNodeDynamicChanged(hash)
+	}
+	return true
+}
+
 func (p *GlobalNodePool) passiveCircuitBreakerDisabled(platformID string) bool {
 	if platformID == "" {
 		return false

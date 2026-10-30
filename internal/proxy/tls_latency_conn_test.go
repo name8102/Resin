@@ -355,7 +355,7 @@ func TestTLSLatencyConn_RealTLSPassthrough(t *testing.T) {
 				server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					_, _ = io.WriteString(w, "TLS passthrough")
 				}))
-				server.TLS = &tls.Config{MinVersion: version, MaxVersion: version}
+				server.TLS = &tls.Config{MinVersion: version, MaxVersion: version, SessionTicketsDisabled: true}
 				server.StartTLS()
 				defer server.Close()
 				raw, err := net.DialTimeout("tcp", server.Listener.Addr().String(), time.Second)
@@ -369,6 +369,7 @@ func TestTLSLatencyConn_RealTLSPassthrough(t *testing.T) {
 				}
 				samples := make(chan time.Duration, 4)
 				observed := newTLSLatencyConn(raw, 0, func(d time.Duration) { samples <- d })
+				observed.handshakeTimeout = 200 * time.Millisecond
 				roots := x509.NewCertPool()
 				roots.AddCert(server.Certificate())
 				client := tls.Client(observed, &tls.Config{
@@ -379,6 +380,9 @@ func TestTLSLatencyConn_RealTLSPassthrough(t *testing.T) {
 				if err := client.Handshake(); err != nil {
 					t.Fatalf("TLS handshake failed: %v", err)
 				}
+				// A completed preconnection can remain idle without a server ticket
+				// or application response. Its handshake deadline must be cleared.
+				time.Sleep(2 * observed.handshakeTimeout)
 				if _, err := io.WriteString(client, "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"); err != nil {
 					t.Fatal(err)
 				}
