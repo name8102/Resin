@@ -111,7 +111,9 @@ func prepareConnectTunnel(
 		// Bound each attempt even when the caller (notably SOCKS5) has no
 		// deadline. This deadline ends at dial; it does not limit the relay.
 		attemptCtx, cancel := context.WithTimeout(ctx, connectAttemptTimeout)
+		dialStart := time.Now()
 		rawConn, err := routed.Outbound.DialContext(attemptCtx, "tcp", M.ParseSocksaddr(target))
+		dialElapsed := time.Since(dialStart)
 		cancel()
 		if ctx.Err() != nil {
 			if rawConn != nil {
@@ -140,19 +142,19 @@ func prepareConnectTunnel(
 			continue
 		}
 
-		return finishConnectTunnel(deps, routed, rawConn, target)
+		return finishConnectTunnel(deps, routed, rawConn, target, dialElapsed)
 	}
 	return last
 }
 
-func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Conn, target string) tunnelPrepareResult {
+func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Conn, target string, dialElapsed time.Duration) tunnelPrepareResult {
 	recordResult := func(ok bool) { recordPassiveResultAsync(deps.health, routed.Route, ok) }
 	var upstreamBase net.Conn = rawConn
 	if deps.metricsSink != nil {
 		deps.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)
 		upstreamBase = newCountingConn(rawConn, deps.metricsSink)
 	}
-	upstreamConn := newTLSLatencyConn(upstreamBase, func(latency time.Duration) {
+	upstreamConn := newTLSLatencyConn(upstreamBase, dialElapsed, func(latency time.Duration) {
 		if deps.health != nil {
 			deps.health.RecordLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), &latency)
 		}

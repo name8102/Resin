@@ -18,11 +18,10 @@ var randomRouteRNGPool = sync.Pool{
 	},
 }
 
-// randomRoute selects a routable node using P2C with latency/load scoring.
-// It intentionally trusts Platform.View as the routable source of truth and
-// does not do extra pool scans/availability validation on the hot path.
-// Post-pick race handling (node removed right after selection) is handled by
-// the caller in RouteRequest.
+// randomRoute chooses among nodes with the strongest recent reachability
+// evidence: target observations first, authority probes second, unknown last.
+// Anonymous requests have no lease load, so random P2C otherwise keeps sending
+// traffic to untested nodes even while known-working target routes exist.
 func randomRoute(
 	plat *platform.Platform,
 	stats *IPLoadStats,
@@ -37,121 +36,48 @@ func randomRoute(
 	if size == 0 {
 		return node.Zero, ErrNoAvailableNodes
 	}
-
 	rng := randomRouteRNGPool.Get().(*rand.Rand)
 	defer randomRouteRNGPool.Put(rng)
-
-	pick := func() (node.Hash, bool) {
-		// Keep ordinary picks O(1). With many cooled-down nodes, a reservoir
-		// fallback still finds the remaining candidate instead of returning a
-		// spurious no-nodes error after random misses.
-		for i := 0; i < 8; i++ {
-			h, ok := view.RandomPick(rng)
-			if !ok {
-				return node.Zero, false
-			}
-			if allows == nil || allows(h) {
-				return h, true
-			}
+	now := time.Now()
+	bestTier := -1
+	bestScore := 0.0
+	ties := 0
+	selected := node.Zero
+	view.Range(func(h node.Hash) bool {
+		if allows != nil && !allows(h) {
+			return true
 		}
-		var selected node.Hash
-		count := 0
-		view.Range(func(h node.Hash) bool {
-			if allows != nil && !allows(h) {
-				return true
-			}
-			count++
-			if rng.IntN(count) == 0 {
+		// Preserve the single-node fast path. The caller rechecks liveness.
+		if size == 1 {
+			selected = h
+			return false
+		}
+		entry, ok := pool.GetEntry(h)
+		if !ok {
+			return true
+		}
+		tier := 0
+		latency, measured := lookupRecentDomainLatency(entry, targetDomain, now, p2cWindow)
+		if measured {
+			tier = 2
+		} else if latency, measured = averageRecentAuthorityLatency(entry, authorities, now, p2cWindow); measured {
+			tier = 1
+		}
+		score := calculateScore(h, latency, plat, stats, pool)
+		if tier > bestTier || (tier == bestTier && score < bestScore) {
+			bestTier, bestScore, ties, selected = tier, score, 1, h
+		} else if tier == bestTier && score == bestScore {
+			ties++
+			if rng.IntN(ties) == 0 {
 				selected = h
 			}
-			return true
-		})
-		return selected, count > 0
-	}
-
-	// Pick 1st candidate.
-	h1, ok1 := pick()
-	if !ok1 {
+		}
+		return true
+	})
+	if selected == node.Zero {
 		return node.Zero, ErrNoAvailableNodes
 	}
-
-	// If view has one node, use it directly.
-	if size == 1 {
-		return h1, nil
-	}
-
-	// Pick 2nd candidate; best-effort to make it distinct.
-	h2, ok2 := pick()
-	if !ok2 {
-		return h1, nil
-	}
-	if h2 == h1 {
-		for i := 0; i < 3; i++ {
-			candidate, ok := pick()
-			if !ok {
-				break
-			}
-			if candidate != h1 {
-				h2 = candidate
-				break
-			}
-		}
-		if h2 == h1 {
-			return h1, nil
-		}
-	}
-
-	// Determine effective latency for comparison.
-	lat1, lat2 := compareLatencies(h1, h2, pool, targetDomain, authorities, p2cWindow)
-
-	// Calculate scores.
-	s1 := calculateScore(h1, lat1, plat, stats, pool)
-	s2 := calculateScore(h2, lat2, plat, stats, pool)
-
-	// Lower score is better.
-	selected := h2 // favor h2 on tie
-	if s1 < s2 {
-		selected = h1
-	}
 	return selected, nil
-}
-
-// compareLatencies determines the latency values for h1 and h2.
-// Implements the 3-level comparison logic:
-// 1. Target domain present in both and recent.
-// 2. Common authority domains present in both and recent.
-// 3. Fallback to 0 (empty) for both.
-func compareLatencies(
-	h1, h2 node.Hash,
-	pool PoolAccessor,
-	target string,
-	authorities []string,
-	window time.Duration,
-) (time.Duration, time.Duration) {
-	e1, ok1 := pool.GetEntry(h1)
-	e2, ok2 := pool.GetEntry(h2)
-	if !ok1 || !ok2 || e1.LatencyTable == nil || e2.LatencyTable == nil {
-		return 0, 0
-	}
-
-	now := time.Now()
-
-	// 1. Target domain check.
-	// target can be empty if extracted domain is invalid/empty, handle gracefully.
-	lat1, ok1 := lookupRecentDomainLatency(e1, target, now, window)
-	lat2, ok2 := lookupRecentDomainLatency(e2, target, now, window)
-	if ok1 && ok2 {
-		return lat1, lat2
-	}
-
-	// 2. Authority intersection check.
-	lat1, lat2, ok := averageComparableAuthorityLatencies(e1, e2, authorities, now, window)
-	if ok {
-		return lat1, lat2
-	}
-
-	// 3. Fallback.
-	return 0, 0
 }
 
 func isRecent(t time.Time, now time.Time, window time.Duration) bool {

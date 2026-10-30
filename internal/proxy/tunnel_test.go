@@ -17,7 +17,7 @@ func TestPumpPreparedTunnelReader_FallsBackToFullCloseWhenHalfCloseUnavailable(t
 		Conn: clientBase,
 		sink: newCountingConnTestSink(),
 	}
-	upstreamConn := newTLSLatencyConn(newCountingConn(upstreamBase, newCountingConnTestSink()), nil)
+	upstreamConn := newTLSLatencyConn(newCountingConn(upstreamBase, newCountingConnTestSink()), 0, nil)
 
 	clientPayloadDone := make(chan []byte, 1)
 	go func() {

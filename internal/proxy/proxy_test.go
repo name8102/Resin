@@ -1187,7 +1187,7 @@ func TestTLSLatencyConn_WriteReadFlow(t *testing.T) {
 	var capturedLatency atomic.Int64
 	done := make(chan struct{})
 
-	conn := newTLSLatencyConn(client, func(latency time.Duration) {
+	conn := newTLSLatencyConn(client, 0, func(latency time.Duration) {
 		capturedLatency.Store(int64(latency))
 		close(done)
 	})

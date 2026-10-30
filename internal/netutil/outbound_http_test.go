@@ -2,13 +2,21 @@ package netutil
 
 import (
 	"context"
+	"encoding/pem"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	M "github.com/sagernet/sing/common/metadata"
 
 	"github.com/Resinat/Resin/internal/testutil"
 )
@@ -82,5 +90,69 @@ func TestConnCloseHook_CloseIsIdempotentAndConcurrentSafe(t *testing.T) {
 
 	if got := onCloseCount.Load(); got != 1 {
 		t.Fatalf("onClose called %d times, want 1", got)
+	}
+}
+
+type delayedDialOutbound struct {
+	adapter.Outbound
+	delay time.Duration
+}
+
+func (o delayedDialOutbound) DialContext(ctx context.Context, network string, dest M.Socksaddr) (net.Conn, error) {
+	timer := time.NewTimer(o.delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, network, dest.String())
+}
+
+func TestHTTPGetViaOutbound_LatencyIncludesDial(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	const dialDelay = 40 * time.Millisecond
+	_, latency, err := HTTPGetViaOutbound(context.Background(), delayedDialOutbound{delay: dialDelay}, srv.URL, OutboundHTTPOptions{})
+	if err != nil {
+		t.Fatalf("HTTPGetViaOutbound: %v", err)
+	}
+	if latency < dialDelay {
+		t.Fatalf("latency %v excludes dial delay %v", latency, dialDelay)
+	}
+}
+
+func TestHTTPGetViaOutbound_HTTPSLatencyIncludesDial(t *testing.T) {
+	// Run with a fresh root pool so the test trusts only its local HTTPS server
+	// without changing process-global TLS settings for other tests.
+	if url := os.Getenv("RESIN_TEST_HTTPS_LATENCY_URL"); url != "" {
+		const dialDelay = 40 * time.Millisecond
+		_, latency, err := HTTPGetViaOutbound(context.Background(), delayedDialOutbound{delay: dialDelay}, url, OutboundHTTPOptions{})
+		if err != nil {
+			t.Fatalf("HTTPS HTTPGetViaOutbound: %v", err)
+		}
+		if latency < dialDelay {
+			t.Fatalf("TLS latency %v excludes dial delay %v", latency, dialDelay)
+		}
+		return
+	}
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	rootFile := filepath.Join(t.TempDir(), "root.pem")
+	rootPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(rootFile, rootPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHTTPGetViaOutbound_HTTPSLatencyIncludesDial$")
+	cmd.Env = append(os.Environ(), "RESIN_TEST_HTTPS_LATENCY_URL="+srv.URL, "SSL_CERT_FILE="+rootFile)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("HTTPS latency regression test: %v\n%s", err, output)
 	}
 }

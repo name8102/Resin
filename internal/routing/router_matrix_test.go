@@ -3,6 +3,7 @@ package routing
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"sync/atomic"
 	"testing"
@@ -157,50 +158,51 @@ func TestRandomRoute_SingleNodeTrustsViewWithoutPoolValidation(t *testing.T) {
 	}
 }
 
-func TestCompareLatencies_ComparableTargetDomain(t *testing.T) {
+func TestRandomRoute_PrefersMeasuredTargetOverUnknownAndAuthority(t *testing.T) {
 	pool := newRouterTestPool()
-
-	h1, e1 := newRoutableEntry(t, `{"id":"cmp-a"}`, "203.0.113.20")
-	h2, e2 := newRoutableEntry(t, `{"id":"cmp-b"}`, "203.0.113.21")
-	e1.LatencyTable.Update("example.com", 25*time.Millisecond, 10*time.Minute)
-	e2.LatencyTable.Update("example.com", 55*time.Millisecond, 10*time.Minute)
-	waitForDomainLatency(t, e1, "example.com")
-	waitForDomainLatency(t, e2, "example.com")
-
-	pool.addEntry(h1, e1)
-	pool.addEntry(h2, e2)
-
-	lat1, lat2 := compareLatencies(
-		h1, h2, pool,
-		"example.com",
-		[]string{"cloudflare.com"},
-		10*time.Minute,
-	)
-	if lat1 != 25*time.Millisecond || lat2 != 55*time.Millisecond {
-		t.Fatalf("unexpected comparable target-domain latencies: got=(%v,%v)", lat1, lat2)
+	plat := platform.NewPlatform("measured", "Measured", nil, nil)
+	pool.addPlatform(plat)
+	target, entry := newRoutableEntry(t, `{"id":"known-target"}`, "203.0.113.20")
+	entry.LatencyTable.Update("example.com", 50*time.Millisecond, time.Minute)
+	pool.addEntry(target, entry)
+	authority, entry := newRoutableEntry(t, `{"id":"known-authority"}`, "203.0.113.21")
+	entry.LatencyTable.Update("cloudflare.com", time.Millisecond, time.Minute)
+	pool.addEntry(authority, entry)
+	for i := 0; i < 100; i++ {
+		h, e := newRoutableEntry(t, fmt.Sprintf(`{"unknown":%d}`, i), "203.0.113.22")
+		pool.addEntry(h, e)
+	}
+	pool.rebuildPlatformView(plat)
+	stats := NewIPLoadStats()
+	for i := 0; i < 20; i++ {
+		got, err := randomRoute(plat, stats, pool, "example.com", []string{"cloudflare.com"}, time.Minute, nil)
+		if err != nil || got != target {
+			t.Fatalf("known target route lost to unmeasured candidate: %v %v", got, err)
+		}
+	}
+	got, err := randomRoute(plat, stats, pool, "example.com", []string{"cloudflare.com"}, time.Minute, func(h node.Hash) bool { return h != target })
+	if err != nil || got != authority {
+		t.Fatalf("excluded target should fall back to known authority: %v %v", got, err)
 	}
 }
 
-func TestCompareLatencies_IncomparableFallsBackToZero(t *testing.T) {
+func TestRandomRoute_IgnoresExpiredEvidenceAndChoosesLowerScore(t *testing.T) {
 	pool := newRouterTestPool()
-
-	h1, e1 := newRoutableEntry(t, `{"id":"incmp-a"}`, "203.0.113.30")
-	h2, e2 := newRoutableEntry(t, `{"id":"incmp-b"}`, "203.0.113.31")
-	e1.LatencyTable.Update("example.com", 20*time.Millisecond, 10*time.Minute)
-	waitForDomainLatency(t, e1, "example.com")
-	// h2 intentionally has no example.com sample.
-
-	pool.addEntry(h1, e1)
-	pool.addEntry(h2, e2)
-
-	lat1, lat2 := compareLatencies(
-		h1, h2, pool,
-		"example.com",
-		nil, // no authority fallback for this matrix case
-		10*time.Minute,
-	)
-	if lat1 != 0 || lat2 != 0 {
-		t.Fatalf("expected incomparable case to fall back to zero latency, got=(%v,%v)", lat1, lat2)
+	plat := platform.NewPlatform("recent", "Recent", nil, nil)
+	pool.addPlatform(plat)
+	expired, entry := newRoutableEntry(t, `{"id":"expired"}`, "203.0.113.30")
+	entry.LatencyTable.LoadEntry("example.com", node.DomainLatencyStats{Ewma: time.Millisecond, LastUpdated: time.Now().Add(-time.Hour)})
+	pool.addEntry(expired, entry)
+	slow, entry := newRoutableEntry(t, `{"id":"slow"}`, "203.0.113.31")
+	entry.LatencyTable.Update("example.com", time.Second, time.Minute)
+	pool.addEntry(slow, entry)
+	fast, entry := newRoutableEntry(t, `{"id":"fast"}`, "203.0.113.32")
+	entry.LatencyTable.Update("example.com", 50*time.Millisecond, time.Minute)
+	pool.addEntry(fast, entry)
+	pool.rebuildPlatformView(plat)
+	got, err := randomRoute(plat, NewIPLoadStats(), pool, "example.com", nil, time.Minute, nil)
+	if err != nil || got != fast {
+		t.Fatalf("want recent fastest route, got %v %v", got, err)
 	}
 }
 

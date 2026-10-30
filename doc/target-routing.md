@@ -3,6 +3,14 @@
 A node can pass the Google latency probe while refusing another destination.
 Global probe health therefore remains separate from passive target failures.
 
+- New routes prefer recent target-domain observations, then recent authority
+  probes, then unmeasured nodes. Within the strongest evidence tier, the existing
+  platform latency/load policy determines the winner; equal scores are randomized.
+  This replaces random two-node sampling, which frequently missed working routes
+  in large pools. Existing account leases are retained while routable.
+- Probe latency includes proxy connection setup through target TLS completion
+  (first response byte for plain HTTP). Passive tunnel samples include dial time
+  plus first-write-to-first-response time, including when Read starts before Write.
 - A failed upstream dial cools down that **platform + node + host:port** route
   for five minutes. Subdomains and ports remain independent; a Google probe or
   an older successful tunnel does not clear the cooldown.

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -79,15 +80,18 @@ func HTTPGetViaOutbound(
 	}
 	req.Header.Set("User-Agent", userAgent)
 
-	var start time.Time
-	var latency time.Duration
+	var latency atomic.Int64
+	requestStart := time.Now()
+	recordLatency := func() {
+		latency.CompareAndSwap(0, int64(time.Since(requestStart)))
+	}
 	trace := &httptrace.ClientTrace{
-		TLSHandshakeStart: func() { start = time.Now() },
 		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
 			if err == nil {
-				latency = time.Since(start)
+				recordLatency()
 			}
 		},
+		GotFirstResponseByte: recordLatency,
 	}
 	req = req.WithContext(httptrace.WithClientTrace(ctx, trace))
 
@@ -98,15 +102,15 @@ func HTTPGetViaOutbound(
 	defer resp.Body.Close()
 
 	if opts.RequireStatusOK && resp.StatusCode != http.StatusOK {
-		return nil, latency, fmt.Errorf("outbound fetch: unexpected status %d from %s", resp.StatusCode, url)
+		return nil, time.Duration(latency.Load()), fmt.Errorf("outbound fetch: unexpected status %d from %s", resp.StatusCode, url)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, latency, err
+		return nil, time.Duration(latency.Load()), err
 	}
 
-	return body, latency, nil
+	return body, time.Duration(latency.Load()), nil
 }
 
 // connCloseHook wraps a net.Conn and calls onClose exactly once on Close.

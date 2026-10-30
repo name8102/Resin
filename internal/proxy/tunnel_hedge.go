@@ -17,9 +17,10 @@ const (
 )
 
 type connectCandidate struct {
-	routed routedOutbound
-	conn   net.Conn
-	err    error
+	routed      routedOutbound
+	conn        net.Conn
+	err         error
+	dialElapsed time.Duration
 }
 
 // Anonymous traffic has no lease to preserve. Overlap its connection setup so
@@ -51,8 +52,9 @@ func prepareHedgedConnectTunnel(ctx context.Context, deps tunnelDeps, platformNa
 			go deps.health.RecordLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), nil)
 		}
 		go func() {
+			dialStart := time.Now()
 			conn, err := routed.Outbound.DialContext(budgetCtx, "tcp", M.ParseSocksaddr(target))
-			candidate := connectCandidate{routed, conn, err}
+			candidate := connectCandidate{routed, conn, err, time.Since(dialStart)}
 			// An unbuffered handoff lets every losing/late connection observe done and
 			// close itself; nothing can be stranded in a result buffer after a winner.
 			select {
@@ -88,7 +90,7 @@ func prepareHedgedConnectTunnel(ctx context.Context, deps tunnelDeps, platformNa
 				return tunnelPrepareResult{route: candidate.routed.Route, proxyErr: classifyConnectError(err), canceled: true}
 			}
 			if candidate.err == nil {
-				return finishConnectTunnel(deps, candidate.routed, candidate.conn, target)
+				return finishConnectTunnel(deps, candidate.routed, candidate.conn, target, candidate.dialElapsed)
 			}
 			if candidate.conn != nil {
 				_ = candidate.conn.Close()
