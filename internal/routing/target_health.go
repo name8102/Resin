@@ -164,8 +164,16 @@ func (r *Router) routeTarget(plat *platform.Platform, target string, excluded []
 		return result
 	}
 	return routeTarget{
-		domain:   netutil.ExtractDomain(target),
-		allows:   func(h node.Hash) bool { return !slices.Contains(excluded, h) && !evidence(h).cooling },
+		domain: netutil.ExtractDomain(target),
+		allows: func(h node.Hash) bool {
+			if slices.Contains(excluded, h) {
+				return false
+			}
+			if entry, ok := r.pool.GetEntry(h); ok && entry.BlacklistUntil.Load() != 0 {
+				return false
+			}
+			return !evidence(h).cooling
+		},
 		evidence: evidence,
 	}
 }

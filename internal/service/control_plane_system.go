@@ -79,7 +79,6 @@ var runtimeConfigAllowedFields = map[string]bool{
 	"reverse_proxy_log_req_body_max_bytes":     true,
 	"reverse_proxy_log_resp_headers_max_bytes": true,
 	"reverse_proxy_log_resp_body_max_bytes":    true,
-	"max_consecutive_failures":                 true,
 	"max_latency_test_interval":                true,
 	"max_authority_latency_test_interval":      true,
 	"max_egress_test_interval":                 true,
@@ -199,9 +198,6 @@ func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
 		return verr
 	}
 	latencyDomain := strings.ToLower(netutil.ExtractDomain(u.Host))
-	if cfg.MaxConsecutiveFailures < 0 {
-		return invalidArg("max_consecutive_failures: must be non-negative")
-	}
 	if cfg.CacheFlushDirtyThreshold < 0 {
 		return invalidArg("cache_flush_dirty_threshold: must be non-negative")
 	}

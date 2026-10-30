@@ -18,7 +18,6 @@ func newCleanupSubscriptionTestService() (*ControlPlaneService, *topology.Subscr
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 	cp := &ControlPlaneService{

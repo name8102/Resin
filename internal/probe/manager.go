@@ -458,8 +458,8 @@ func (m *ProbeManager) scanEgress() {
 			return true // disabled node -> skip periodic probe
 		}
 
-		if entry.Outbound.Load() == nil {
-			return true // skip nil outbound
+		if entry.Outbound.Load() == nil || entry.BlacklistUntil.Load() > now.UnixNano() {
+			return true // unavailable or still quarantined
 		}
 
 		// Check if due: lastAttempt + interval - lookahead <= now.
@@ -539,7 +539,7 @@ func (m *ProbeManager) runProbeWorker() {
 
 func (m *ProbeManager) executeTask(task probeTask) {
 	entry, ok := m.pool.GetEntry(task.key.hash)
-	if !ok || entry.Outbound.Load() == nil {
+	if !ok || entry.Outbound.Load() == nil || entry.BlacklistUntil.Load() > time.Now().UnixNano() {
 		return
 	}
 	if entry.IsDisabledBySubscriptions(m.pool.MakeSubLookup()) {
@@ -716,6 +716,10 @@ func (m *ProbeManager) isLatencyProbeDue(
 	authorities []string,
 	lookahead time.Duration,
 ) bool {
+	if until := entry.BlacklistUntil.Load(); until != 0 {
+		return now.UnixNano() >= until // one active verification when quarantine ends
+	}
+
 	if m.latencyWindow != nil {
 		window := m.latencyWindow()
 		lastPassive := entry.LastPassiveActivity.Load()

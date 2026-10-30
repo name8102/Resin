@@ -12,9 +12,6 @@ func TestNewDefaultRuntimeConfig(t *testing.T) {
 	if cfg.RequestLogEnabled != true {
 		t.Errorf("RequestLogEnabled: got %v, want true", cfg.RequestLogEnabled)
 	}
-	if cfg.MaxConsecutiveFailures != 3 {
-		t.Errorf("MaxConsecutiveFailures: got %d, want 3", cfg.MaxConsecutiveFailures)
-	}
 	if cfg.CacheFlushDirtyThreshold != 1000 {
 		t.Errorf("CacheFlushDirtyThreshold: got %d, want 1000", cfg.CacheFlushDirtyThreshold)
 	}
@@ -37,8 +34,8 @@ func TestRuntimeConfig_JSONRoundTrip(t *testing.T) {
 	}
 
 	// Spot-check key fields after round-trip
-	if decoded.MaxConsecutiveFailures != original.MaxConsecutiveFailures {
-		t.Errorf("MaxConsecutiveFailures: got %d, want %d", decoded.MaxConsecutiveFailures, original.MaxConsecutiveFailures)
+	if decoded.MaxLatencyTestInterval != original.MaxLatencyTestInterval {
+		t.Errorf("MaxLatencyTestInterval: got %v, want %v", decoded.MaxLatencyTestInterval, original.MaxLatencyTestInterval)
 	}
 }
 
@@ -95,7 +92,6 @@ func TestRuntimeConfig_JSONFieldNames(t *testing.T) {
 		"reverse_proxy_log_req_body_max_bytes",
 		"reverse_proxy_log_resp_headers_max_bytes",
 		"reverse_proxy_log_resp_body_max_bytes",
-		"max_consecutive_failures",
 		"max_latency_test_interval",
 		"max_authority_latency_test_interval",
 		"max_egress_test_interval",

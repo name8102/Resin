@@ -61,7 +61,6 @@ func newControlPlaneTestServerWithBodyLimit(
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 32,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 	router := routing.NewRouter(routing.RouterConfig{
@@ -1086,8 +1085,8 @@ func TestAPIContract_SystemDefaultConfigSnapshot(t *testing.T) {
 	srv, _, _ := newControlPlaneTestServer(t)
 
 	patchRec := doJSONRequest(t, srv, http.MethodPatch, "/api/v1/system/config", map[string]any{
-		"request_log_enabled":      true,
-		"max_consecutive_failures": 9,
+		"request_log_enabled":         true,
+		"cache_flush_dirty_threshold": 9,
 	}, true)
 	if patchRec.Code != http.StatusOK {
 		t.Fatalf("patch config status: got %d, want %d, body=%s", patchRec.Code, http.StatusOK, patchRec.Body.String())
@@ -1101,8 +1100,8 @@ func TestAPIContract_SystemDefaultConfigSnapshot(t *testing.T) {
 	if defaultBody["request_log_enabled"] != true {
 		t.Fatalf("default request_log_enabled: got %v, want true", defaultBody["request_log_enabled"])
 	}
-	if defaultBody["max_consecutive_failures"] != float64(3) {
-		t.Fatalf("default max_consecutive_failures: got %v, want 3", defaultBody["max_consecutive_failures"])
+	if defaultBody["cache_flush_dirty_threshold"] != float64(1000) {
+		t.Fatalf("default cache_flush_dirty_threshold: got %v, want 1000", defaultBody["cache_flush_dirty_threshold"])
 	}
 
 	currentRec := doJSONRequest(t, srv, http.MethodGet, "/api/v1/system/config", nil, true)
@@ -1113,8 +1112,8 @@ func TestAPIContract_SystemDefaultConfigSnapshot(t *testing.T) {
 	if currentBody["request_log_enabled"] != true {
 		t.Fatalf("current request_log_enabled: got %v, want true", currentBody["request_log_enabled"])
 	}
-	if currentBody["max_consecutive_failures"] != float64(9) {
-		t.Fatalf("current max_consecutive_failures: got %v, want 9", currentBody["max_consecutive_failures"])
+	if currentBody["cache_flush_dirty_threshold"] != float64(9) {
+		t.Fatalf("current cache_flush_dirty_threshold: got %v, want 9", currentBody["cache_flush_dirty_threshold"])
 	}
 }
 

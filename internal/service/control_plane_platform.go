@@ -597,6 +597,8 @@ type NodeSummary struct {
 	LastError                        string    `json:"last_error,omitempty"`
 	CircuitOpenSince                 *string   `json:"circuit_open_since"`
 	FailureCount                     int       `json:"failure_count"`
+	BlacklistUntil                   *string   `json:"blacklist_until,omitempty"`
+	BlacklistStrikes                 int       `json:"blacklist_strikes,omitempty"`
 	EgressIP                         string    `json:"egress_ip,omitempty"`
 	Region                           string    `json:"region,omitempty"`
 	LastEgressUpdate                 string    `json:"last_egress_update,omitempty"`
@@ -610,7 +612,7 @@ type NodeSummary struct {
 // IsHealthyAndEnabled follows the node-summary health rule used by API/UI
 // aggregates: enabled, outbound-ready, and not circuit-open.
 func (n NodeSummary) IsHealthyAndEnabled() bool {
-	return n.Enabled && n.HasOutbound && n.CircuitOpenSince == nil
+	return n.Enabled && n.HasOutbound && n.CircuitOpenSince == nil && n.BlacklistUntil == nil
 }
 
 type NodeTag struct {
@@ -622,12 +624,13 @@ type NodeTag struct {
 
 func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEntry) NodeSummary {
 	ns := NodeSummary{
-		NodeHash:     h.Hex(),
-		CreatedAt:    entry.CreatedAt.UTC().Format(time.RFC3339Nano),
-		Enabled:      true,
-		HasOutbound:  entry.HasOutbound(),
-		LastError:    entry.GetLastError(),
-		FailureCount: int(entry.FailureCount.Load()),
+		NodeHash:         h.Hex(),
+		CreatedAt:        entry.CreatedAt.UTC().Format(time.RFC3339Nano),
+		Enabled:          true,
+		HasOutbound:      entry.HasOutbound(),
+		LastError:        entry.GetLastError(),
+		FailureCount:     int(entry.FailureCount.Load()),
+		BlacklistStrikes: int(entry.BlacklistStrikes.Load()),
 	}
 
 	if s != nil && s.Pool != nil {
@@ -638,6 +641,11 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 	if cos := entry.CircuitOpenSince.Load(); cos > 0 {
 		t := time.Unix(0, cos).UTC().Format(time.RFC3339Nano)
 		ns.CircuitOpenSince = &t
+	}
+
+	if until := entry.BlacklistUntil.Load(); until > 0 {
+		t := time.Unix(0, until).UTC().Format(time.RFC3339Nano)
+		ns.BlacklistUntil = &t
 	}
 
 	egressIP := entry.GetEgressIP()

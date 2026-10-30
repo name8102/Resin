@@ -14,7 +14,6 @@ type RuntimeConfig struct {
 	ReverseProxyLogRespBodyMaxBytes    int  `json:"reverse_proxy_log_resp_body_max_bytes"`
 
 	// Health check
-	MaxConsecutiveFailures          int      `json:"max_consecutive_failures"`
 	MaxLatencyTestInterval          Duration `json:"max_latency_test_interval"`
 	MaxAuthorityLatencyTestInterval Duration `json:"max_authority_latency_test_interval"`
 	MaxEgressTestInterval           Duration `json:"max_egress_test_interval"`
@@ -43,7 +42,6 @@ func NewDefaultRuntimeConfig() *RuntimeConfig {
 		ReverseProxyLogRespHeadersMaxBytes: 1024,
 		ReverseProxyLogRespBodyMaxBytes:    1024,
 
-		MaxConsecutiveFailures:          3,
 		MaxLatencyTestInterval:          Duration(1 * time.Hour),
 		MaxAuthorityLatencyTestInterval: Duration(3 * time.Hour),
 		MaxEgressTestInterval:           Duration(24 * time.Hour),

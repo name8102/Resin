@@ -13,7 +13,7 @@ import (
 	"github.com/Resinat/Resin/internal/testutil"
 )
 
-func newHealthTestPool(maxFailures int) (*GlobalNodePool, *SubscriptionManager) {
+func newHealthTestPool() (*GlobalNodePool, *SubscriptionManager) {
 	subMgr := NewSubscriptionManager()
 	sub := subscription.NewSubscription("s1", "TestSub", "url", true, false)
 	subMgr.Register(sub)
@@ -22,7 +22,6 @@ func newHealthTestPool(maxFailures int) (*GlobalNodePool, *SubscriptionManager) 
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(addr netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return maxFailures },
 	})
 	return pool, subMgr
 }
@@ -39,36 +38,18 @@ func addTestNode(pool *GlobalNodePool, sub *subscription.Subscription, raw strin
 // --- RecordResult tests ---
 
 func TestRecordResult_CircuitBreak(t *testing.T) {
-	pool, subMgr := newHealthTestPool(3) // break after 3 failures
-	sub := subMgr.Lookup("s1")
-	h := addTestNode(pool, sub, `{"type":"ss","n":"1"}`)
+	pool, subMgr := newHealthTestPool()
+	h := addTestNode(pool, subMgr.Lookup("s1"), `{"type":"ss","n":"first-failure"}`)
 	entry, _ := pool.GetEntry(h)
-
-	// New node starts circuit-open; mark one success to bring it to healthy state.
 	pool.RecordResult(h, true)
-	if entry.IsCircuitOpen() {
-		t.Fatal("node should recover after first success")
-	}
-
-	// 2 failures — not yet broken.
 	pool.RecordResult(h, false)
-	pool.RecordResult(h, false)
-	if entry.IsCircuitOpen() {
-		t.Fatal("should not be circuit-open after 2 failures")
-	}
-
-	// 3rd failure → circuit opens.
-	pool.RecordResult(h, false)
-	if !entry.IsCircuitOpen() {
-		t.Fatal("should be circuit-open after 3 failures")
-	}
-	if entry.FailureCount.Load() != 3 {
-		t.Fatalf("expected FailureCount=3, got %d", entry.FailureCount.Load())
+	if !entry.IsCircuitOpen() || entry.FailureCount.Load() != 1 || entry.BlacklistUntil.Load() == 0 {
+		t.Fatal("first failure did not blacklist node")
 	}
 }
 
 func TestRecordResult_Recovery(t *testing.T) {
-	pool, subMgr := newHealthTestPool(2)
+	pool, subMgr := newHealthTestPool()
 	sub := subMgr.Lookup("s1")
 	h := addTestNode(pool, sub, `{"type":"ss","n":"2"}`)
 
@@ -79,7 +60,8 @@ func TestRecordResult_Recovery(t *testing.T) {
 		t.Fatal("should be circuit open")
 	}
 
-	// Success → resets.
+	// Successful active verification recovers only after quarantine expires.
+	entry.BlacklistUntil.Store(time.Now().Add(-time.Second).UnixNano())
 	pool.RecordResult(h, true)
 	if entry.IsCircuitOpen() {
 		t.Fatal("should not be circuit-open after success")
@@ -89,48 +71,12 @@ func TestRecordResult_Recovery(t *testing.T) {
 	}
 }
 
-func TestRecordResult_MaxConsecutiveFailuresPulled(t *testing.T) {
-	subMgr := NewSubscriptionManager()
-	sub := subscription.NewSubscription("s1", "TestSub", "url", true, false)
-	subMgr.Register(sub)
-
-	var maxFailures atomic.Int64
-	maxFailures.Store(3)
-
-	pool := NewGlobalNodePool(PoolConfig{
-		SubLookup:              subMgr.Lookup,
-		GeoLookup:              func(addr netip.Addr) string { return "us" },
-		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return int(maxFailures.Load()) },
-	})
-
-	h := addTestNode(pool, sub, `{"type":"ss","n":"pull-threshold"}`)
-	entry, _ := pool.GetEntry(h)
-	pool.RecordResult(h, true)
-	if entry.IsCircuitOpen() {
-		t.Fatal("node should recover after first success")
-	}
-
-	pool.RecordResult(h, false)
-	if entry.IsCircuitOpen() {
-		t.Fatal("should not be circuit-open after first failure")
-	}
-
-	// Lower threshold dynamically. Next failure should open circuit.
-	maxFailures.Store(2)
-	pool.RecordResult(h, false)
-	if !entry.IsCircuitOpen() {
-		t.Fatal("should be circuit-open after threshold shrinks")
-	}
-}
-
 func TestRecordResult_DynamicCallback_OnActualChange(t *testing.T) {
 	var count atomic.Int32
 	pool := NewGlobalNodePool(PoolConfig{
 		SubLookup:              NewSubscriptionManager().Lookup,
 		GeoLookup:              func(addr netip.Addr) string { return "" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 5 },
 		OnNodeDynamicChanged:   func(hash node.Hash) { count.Add(1) },
 	})
 
@@ -142,9 +88,9 @@ func TestRecordResult_DynamicCallback_OnActualChange(t *testing.T) {
 	pool.RecordResult(h, false)
 	pool.RecordResult(h, true)
 
-	// New node starts circuit-open: first success recovers, then failure and success mutate again.
-	if count.Load() != 3 {
-		t.Fatalf("expected 3 callbacks, got %d", count.Load())
+	// A success during quarantine must not reset the failed node.
+	if count.Load() != 2 {
+		t.Fatalf("expected 2 callbacks, got %d", count.Load())
 	}
 }
 
@@ -157,7 +103,6 @@ func TestRecordResult_CircuitBreak_RemovesFromView(t *testing.T) {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(addr netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 	plat := platform.NewPlatform("p1", "Test", nil, nil)
 	pool.RegisterPlatform(plat)
@@ -187,7 +132,12 @@ func TestRecordResult_CircuitBreak_RemovesFromView(t *testing.T) {
 		t.Fatal("circuit-broken node should be removed from view")
 	}
 
-	// Recover → back in view.
+	// Probe success cannot recover before expiry.
+	pool.RecordResult(h, true)
+	if plat.View().Size() != 0 {
+		t.Fatal("blacklist reopened early")
+	}
+	entry.BlacklistUntil.Store(time.Now().Add(-time.Second).UnixNano())
 	pool.RecordResult(h, true)
 	if plat.View().Size() != 1 {
 		t.Fatal("recovered node should be back in view")
@@ -195,7 +145,7 @@ func TestRecordResult_CircuitBreak_RemovesFromView(t *testing.T) {
 }
 
 func TestRecordPassiveResult_DisabledPlatformSkipsFailures(t *testing.T) {
-	pool, subMgr := newHealthTestPool(2)
+	pool, subMgr := newHealthTestPool()
 	sub := subMgr.Lookup("s1")
 	h := addTestNode(pool, sub, `{"type":"ss","n":"passive-disabled"}`)
 	entry, _ := pool.GetEntry(h)
@@ -222,7 +172,7 @@ func TestRecordPassiveResult_DisabledPlatformSkipsFailures(t *testing.T) {
 }
 
 func TestRecordPassiveResult_EnabledPlatformCountsFailures(t *testing.T) {
-	pool, subMgr := newHealthTestPool(2)
+	pool, subMgr := newHealthTestPool()
 	sub := subMgr.Lookup("s1")
 	h := addTestNode(pool, sub, `{"type":"ss","n":"passive-enabled"}`)
 	entry, _ := pool.GetEntry(h)
@@ -245,7 +195,7 @@ func TestRecordPassiveResult_EnabledPlatformCountsFailures(t *testing.T) {
 // --- RecordLatency tests ---
 
 func TestRecordLatency_NormalizesDomain(t *testing.T) {
-	pool, subMgr := newHealthTestPool(5)
+	pool, subMgr := newHealthTestPool()
 	sub := subMgr.Lookup("s1")
 	h := addTestNode(pool, sub, `{"type":"ss","n":"lat"}`)
 
@@ -273,7 +223,6 @@ func TestRecordLatency_FirstRecord_PlatformDirty(t *testing.T) {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(addr netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		OnNodeLatencyChanged:   func(hash node.Hash, domain string) { latencyCBCount.Add(1) },
 	})
 
@@ -292,7 +241,6 @@ func TestRecordLatency_AuthorityResident_RegularBounded(t *testing.T) {
 		SubLookup:              NewSubscriptionManager().Lookup,
 		GeoLookup:              func(netip.Addr) string { return "" },
 		MaxLatencyTableEntries: 1,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyAuthorities:     func() []string { return []string{"gstatic.com"} },
 	})
 
@@ -328,7 +276,6 @@ func TestRecordLatency_RegularEviction_EmitsEvictedDomainCallback(t *testing.T) 
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "" },
 		MaxLatencyTableEntries: 1,
-		MaxConsecutiveFailures: func() int { return 3 },
 		OnNodeLatencyChanged: func(_ node.Hash, domain string) {
 			countsMu.Lock()
 			domainCounts[domain]++
@@ -361,7 +308,6 @@ func TestRecordLatency_AttemptOnly_UpdatesAttemptTimestamps(t *testing.T) {
 		SubLookup:              NewSubscriptionManager().Lookup,
 		GeoLookup:              func(netip.Addr) string { return "" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyAuthorities:     func() []string { return []string{"example.com"} },
 		OnNodeDynamicChanged:   func(hash node.Hash) { dynamicCBCount.Add(1) },
 	})
@@ -397,7 +343,6 @@ func TestRecordPassiveLatency_PreservesProbeAttempts(t *testing.T) {
 			var dynamicChanges, latencyChanges atomic.Int32
 			pool := NewGlobalNodePool(PoolConfig{
 				MaxLatencyTableEntries: 16,
-				MaxConsecutiveFailures: func() int { return 3 },
 				LatencyAuthorities:     func() []string { return []string{"example.com"} },
 				OnNodeDynamicChanged:   func(node.Hash) { dynamicChanges.Add(1) },
 				OnNodeLatencyChanged:   func(node.Hash, string) { latencyChanges.Add(1) },
@@ -447,7 +392,6 @@ func TestUpdateNodeEgressIP_Change(t *testing.T) {
 		SubLookup:              NewSubscriptionManager().Lookup,
 		GeoLookup:              func(addr netip.Addr) string { return "" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		OnNodeDynamicChanged:   func(hash node.Hash) { dynamicCount.Add(1) },
 	})
 
@@ -489,7 +433,6 @@ func TestUpdateNodeEgressIP_LocStateMachine(t *testing.T) {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(_ netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	plat := platform.NewPlatform("p1", "JP-Only", nil, []string{"jp"})

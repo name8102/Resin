@@ -3,6 +3,26 @@
 A node can pass the Google latency probe while refusing another destination.
 Global probe health therefore remains separate from passive target failures.
 
+- The first failed active probe or attributable initial upstream failure
+  blacklists the **whole node**, across origins, for one hour. Repeat admissions
+  increase quarantine to six hours, then 24 hours. Concurrent failures during
+  the same quarantine do not continuously extend it. The old configurable
+  consecutive-failure threshold is removed rather than bypassing this policy.
+- Blacklist expiry alone does not make a node eligible. Only a successful active
+  probe after expiry clears its marker; successes from probes before expiry or
+  from old user connections cannot clear it. Periodic/queued probes skip nodes
+  while quarantined and schedule verification on expiry. No routing fallback
+  bypasses the blacklist, including sticky leases or stale platform views.
+- Blacklist deadlines and strike counts are persisted with node dynamic state
+  and exposed as `blacklist_until` / `blacklist_strikes` in node summaries. Cache
+  migration quarantines existing nodes with nonzero recorded failures for one
+  hour. Healthy-node aggregates exclude blacklist markers even after expiry.
+- A TLS ServerHello alone is not positive route evidence. A subsequent client
+  flight followed by valid upstream TLS-record payload is required; framing is
+  observed without decryption, payload retention, or certificate verification.
+  The initial TLS exchange has a five-second read deadline, cleared immediately
+  after this bidirectional progress. EOF after ServerHello and stalled handshakes
+  now feed node-wide blacklisting instead of merely generating a fast latency.
 - New routes rank exact **platform + node + host:port** response evidence first:
   two recent responses outrank one, followed by domain latency, authority probes,
   unknown nodes, and unrecovered failure history. Within an actual-response tier,
@@ -17,12 +37,11 @@ Global probe health therefore remains separate from passive target failures.
   Passive-breaker-disabled platforms ignore penalties; request exclusions remain.
 - Probe latency includes proxy setup through TLS completion (first response byte
   for plain HTTP). Passive tunnel timing includes dial plus first-write-to-response
-  time, even when Read starts before Write. For TLS-looking requests, a bounded
-  six-byte prefix must identify a ServerHello before a positive sample is written;
-  alerts, wrong protocols, and truncated replies do not create positive evidence.
-  This observes TLS framing, not certificate validity or full handshake completion.
+  time, even when Read starts before Write. For TLS-looking requests, positive samples wait for
+  the bidirectional TLS progress described above; alerts, wrong protocols, and
+  incomplete handshakes do not create positive evidence.
 - Health success is recorded at the first qualifying response, not when an old
-  long-lived tunnel closes. Initial failure feedback distinguishes upstream IO
+  long-lived tunnel closes. Initial failure feedback is synchronous and distinguishes upstream IO
   from client cancellation; idle/server-push-only sessions and local hijack errors
   do not reset or increment node-health counters. Established connection shutdowns
   do not masquerade as initial TLS failures.

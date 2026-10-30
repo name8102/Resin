@@ -294,7 +294,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if hasRoute {
 			p.router.ReportTargetFailure(route, target)
-			recordPassiveResultAsync(p.health, route, false)
+			recordPassiveResult(p.health, route, false)
 		}
 		// Once Transport acquired a connection, request bytes may have been
 		// sent. Retrying could duplicate a side effect, even without a body.
@@ -333,7 +333,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			lifecycle.setUpstreamError("forward_upstream_to_client_copy", copyErr)
 			lifecycle.setNetOK(false)
 			if hasRoute {
-				recordPassiveResultAsync(p.health, route, false)
+				recordPassiveResult(p.health, route, false)
 			}
 		}
 		return
@@ -341,7 +341,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Full body transfer succeeded — count as network success even for 5xx HTTP.
 	if hasRoute {
-		recordPassiveResultAsync(p.health, route, true)
+		recordPassiveResult(p.health, route, true)
 	}
 }
 

@@ -18,13 +18,13 @@ type passiveHealthRecorder interface {
 	RecordPassiveResult(platformID string, hash node.Hash, success bool)
 }
 
-func recordPassiveResultAsync(health HealthRecorder, route routing.RouteResult, success bool) {
+func recordPassiveResult(health HealthRecorder, route routing.RouteResult, success bool) {
 	if health == nil {
 		return
 	}
 	if recorder, ok := health.(passiveHealthRecorder); ok {
-		go recorder.RecordPassiveResult(route.PlatformID, route.NodeHash, success)
+		recorder.RecordPassiveResult(route.PlatformID, route.NodeHash, success)
 		return
 	}
-	go health.RecordResult(route.NodeHash, success)
+	health.RecordResult(route.NodeHash, success)
 }

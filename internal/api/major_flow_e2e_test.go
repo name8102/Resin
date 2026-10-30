@@ -69,7 +69,6 @@ func newMajorFlowHarness(t *testing.T, subscriptionUserAgent string) *majorFlowH
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 32,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 	outboundMgr := outbound.NewOutboundManager(pool, &testutil.StubOutboundBuilder{})

@@ -22,7 +22,6 @@ func newTestPool(subMgr *SubscriptionManager) *GlobalNodePool {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(addr netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 }
 
@@ -284,7 +283,6 @@ func TestPool_NotifyNodeDirty_UpdatesPlatformsInParallel(t *testing.T) {
 			return "us"
 		},
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	raw := json.RawMessage(`{"type":"ss","server":"1.1.1.1"}`)
@@ -362,7 +360,6 @@ func TestPool_RebuildAllPlatforms_UpdatesInParallel(t *testing.T) {
 			return "us"
 		},
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	raw := json.RawMessage(`{"type":"ss","server":"1.1.1.1"}`)

@@ -126,8 +126,11 @@ func TestTLSLatencyConn_FragmentedHelloRemainsTransparent(t *testing.T) {
 	if err != nil || string(got) != string(testServerHello) {
 		t.Fatalf("fragmented response changed: %x %v", got, err)
 	}
-	if len(samples) != 1 {
-		t.Fatalf("got %d samples, want exactly one", len(samples))
+	if len(samples) != 0 {
+		t.Fatalf("got %d samples before post-ServerHello progress", len(samples))
+	}
+	if !observed.observation().handshakeIncomplete {
+		t.Fatal("ServerHello alone should leave TLS progress incomplete")
 	}
 }
 

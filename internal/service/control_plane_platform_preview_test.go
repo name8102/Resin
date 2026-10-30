@@ -29,7 +29,6 @@ func buildPreviewFilterFixture(t *testing.T) previewFilterFixture {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 

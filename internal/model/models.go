@@ -69,6 +69,8 @@ type NodeDynamic struct {
 	Hash                               string `json:"hash"`
 	FailureCount                       int    `json:"failure_count"`
 	CircuitOpenSince                   int64  `json:"circuit_open_since"`
+	BlacklistUntilNs                   int64  `json:"blacklist_until_ns"`
+	BlacklistStrikes                   int    `json:"blacklist_strikes"`
 	EgressIP                           string `json:"egress_ip"`
 	EgressRegion                       string `json:"egress_region"`
 	EgressUpdatedAtNs                  int64  `json:"egress_updated_at_ns"`

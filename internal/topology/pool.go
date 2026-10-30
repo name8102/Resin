@@ -23,7 +23,8 @@ import (
 // It uses xsync.Map for concurrent access and xsync.Compute for atomic
 // AddNodeFromSub / RemoveNodeFromSub operations.
 type GlobalNodePool struct {
-	nodes *xsync.Map[node.Hash, *node.NodeEntry]
+	healthMu sync.Mutex // serializes compound blacklist/circuit transitions
+	nodes    *xsync.Map[node.Hash, *node.NodeEntry]
 
 	// Platform references for dirty-notify.
 	platMu         sync.RWMutex
@@ -47,7 +48,6 @@ type GlobalNodePool struct {
 
 	// Health config
 	maxLatencyTableEntries int
-	maxConsecutiveFailures func() int
 	latencyDecayWindow     func() time.Duration
 	latencyAuthorities     func() []string
 }
@@ -62,7 +62,6 @@ type PoolConfig struct {
 	OnNodeDynamicChanged   func(hash node.Hash)
 	OnNodeLatencyChanged   func(hash node.Hash, domain string)
 	MaxLatencyTableEntries int
-	MaxConsecutiveFailures func() int
 	LatencyDecayWindow     func() time.Duration
 	LatencyAuthorities     func() []string
 }
@@ -76,11 +75,6 @@ var (
 
 // NewGlobalNodePool creates a new GlobalNodePool.
 func NewGlobalNodePool(cfg PoolConfig) *GlobalNodePool {
-	maxConsecutiveFailuresFn := cfg.MaxConsecutiveFailures
-	if maxConsecutiveFailuresFn == nil {
-		panic("topology: NewGlobalNodePool requires non-nil MaxConsecutiveFailures")
-	}
-
 	return &GlobalNodePool{
 		nodes:                  xsync.NewMap[node.Hash, *node.NodeEntry](),
 		subLookup:              cfg.SubLookup,
@@ -91,7 +85,6 @@ func NewGlobalNodePool(cfg PoolConfig) *GlobalNodePool {
 		onNodeDynamicChanged:   cfg.OnNodeDynamicChanged,
 		onNodeLatencyChanged:   cfg.OnNodeLatencyChanged,
 		maxLatencyTableEntries: cfg.MaxLatencyTableEntries,
-		maxConsecutiveFailures: maxConsecutiveFailuresFn,
 		latencyDecayWindow:     cfg.LatencyDecayWindow,
 		latencyAuthorities:     cfg.LatencyAuthorities,
 		platformByID:           make(map[string]*platform.Platform),
@@ -517,21 +510,50 @@ func (p *GlobalNodePool) RangeNodes(fn func(node.Hash, *node.NodeEntry) bool) {
 	p.nodes.Range(fn)
 }
 
-// RecordResult records a probe or passive health-check result.
-// On success, resets FailureCount and clears circuit-breaker.
-// On failure, increments FailureCount and opens circuit-breaker if threshold is reached.
-// Notifies platforms only when circuit state changes (open/recover).
-// Fires OnNodeDynamicChanged only when dynamic fields actually change.
+// RecordResult records an active probe result. Its first failure blacklists
+// the node; recovery requires successful verification after quarantine expiry.
 func (p *GlobalNodePool) RecordResult(hash node.Hash, success bool) {
+	p.recordHealthResult(hash, success, true)
+}
+
+// RecordPassiveResult blacklists on the first attributable upstream failure.
+// Old user connections never rehabilitate blacklisted nodes.
+func (p *GlobalNodePool) RecordPassiveResult(platformID string, hash node.Hash, success bool) {
+	if !success && p.passiveCircuitBreakerDisabled(platformID) {
+		return
+	}
+	p.recordHealthResult(hash, success, false)
+}
+
+func blacklistDuration(strikes int32) time.Duration {
+	switch strikes {
+	case 1:
+		return time.Hour
+	case 2:
+		return 6 * time.Hour
+	default:
+		return 24 * time.Hour
+	}
+}
+
+func (p *GlobalNodePool) recordHealthResult(hash node.Hash, success bool, activeProbe bool) {
 	entry, ok := p.nodes.Load(hash)
 	if !ok {
 		return
 	}
-
-	dynamicChanged := false
-	circuitStateChanged := false
-
+	now := time.Now()
+	p.healthMu.Lock()
+	dynamicChanged, circuitStateChanged := false, false
+	until := entry.BlacklistUntil.Load()
 	if success {
+		if until != 0 {
+			if !activeProbe || now.UnixNano() < until {
+				p.healthMu.Unlock()
+				return
+			}
+			entry.BlacklistUntil.Store(0)
+			dynamicChanged = true
+		}
 		if entry.FailureCount.Swap(0) != 0 {
 			dynamicChanged = true
 		}
@@ -540,31 +562,23 @@ func (p *GlobalNodePool) RecordResult(hash node.Hash, success bool) {
 			circuitStateChanged = true
 		}
 	} else {
-		newCount := entry.FailureCount.Add(1)
+		entry.FailureCount.Add(1)
 		dynamicChanged = true
-		maxConsecutiveFailures := p.currentMaxConsecutiveFailures()
-		if maxConsecutiveFailures > 0 && int(newCount) >= maxConsecutiveFailures {
-			// Open circuit if not already open.
-			if entry.CircuitOpenSince.CompareAndSwap(0, time.Now().UnixNano()) {
-				circuitStateChanged = true
-			}
+		if until == 0 || now.UnixNano() >= until {
+			strikes := min(entry.BlacklistStrikes.Load()+1, 3)
+			entry.BlacklistStrikes.Store(strikes)
+			entry.BlacklistUntil.Store(now.Add(blacklistDuration(strikes)).UnixNano())
+		}
+		if entry.CircuitOpenSince.CompareAndSwap(0, now.UnixNano()) {
+			circuitStateChanged = true
 		}
 	}
-
+	p.healthMu.Unlock()
 	if circuitStateChanged {
 		p.notifyAllPlatformsDirty(hash)
 	}
 	if dynamicChanged && p.onNodeDynamicChanged != nil {
 		p.onNodeDynamicChanged(hash)
-	}
-}
-
-// RecordPassiveResult records health feedback from user proxy traffic.
-// Failed passive traffic is ignored when the originating platform disables
-// passive circuit breaking; successes still count as positive health feedback.
-func (p *GlobalNodePool) RecordPassiveResult(platformID string, hash node.Hash, success bool) {
-	if success || !p.passiveCircuitBreakerDisabled(platformID) {
-		p.RecordResult(hash, success)
 	}
 }
 
@@ -581,10 +595,6 @@ func (p *GlobalNodePool) passiveCircuitBreakerDisabled(platformID string) bool {
 		return false
 	}
 	return plat.PassiveCircuitBreakerDisabled
-}
-
-func (p *GlobalNodePool) currentMaxConsecutiveFailures() int {
-	return p.maxConsecutiveFailures()
 }
 
 // RecordLatency records a latency probe attempt for the given node and raw target.

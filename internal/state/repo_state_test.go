@@ -408,7 +408,7 @@ func TestStateRepo_SystemConfig_RoundTrip(t *testing.T) {
 
 	// Save.
 	c := config.NewDefaultRuntimeConfig()
-	c.MaxConsecutiveFailures = 7
+	c.CacheFlushDirtyThreshold = 7
 	now := time.Now().UnixNano()
 	if err := repo.SaveSystemConfig(c, 1, now); err != nil {
 		t.Fatal(err)
@@ -422,12 +422,12 @@ func TestStateRepo_SystemConfig_RoundTrip(t *testing.T) {
 	if ver != 1 {
 		t.Fatalf("expected version 1, got %d", ver)
 	}
-	if cfg.MaxConsecutiveFailures != 7 {
-		t.Fatalf("expected max_consecutive_failures 7, got %d", cfg.MaxConsecutiveFailures)
+	if cfg.CacheFlushDirtyThreshold != 7 {
+		t.Fatalf("expected cache_flush_dirty_threshold 7, got %d", cfg.CacheFlushDirtyThreshold)
 	}
 
 	// Upsert (idempotent, bump version).
-	c.MaxConsecutiveFailures = 11
+	c.CacheFlushDirtyThreshold = 11
 	if err := repo.SaveSystemConfig(c, 2, now+1); err != nil {
 		t.Fatal(err)
 	}
@@ -435,8 +435,8 @@ func TestStateRepo_SystemConfig_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ver != 2 || cfg.MaxConsecutiveFailures != 11 {
-		t.Fatalf("expected version 2 + max_consecutive_failures 11, got %d + %d", ver, cfg.MaxConsecutiveFailures)
+	if ver != 2 || cfg.CacheFlushDirtyThreshold != 11 {
+		t.Fatalf("expected version 2 + cache_flush_dirty_threshold 11, got %d + %d", ver, cfg.CacheFlushDirtyThreshold)
 	}
 }
 

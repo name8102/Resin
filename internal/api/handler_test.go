@@ -232,8 +232,8 @@ func TestSystemConfig_OK(t *testing.T) {
 	}
 
 	// JSON numbers are float64
-	if maxFail, ok := body["max_consecutive_failures"].(float64); !ok || maxFail != 3 {
-		t.Errorf("max_consecutive_failures: got %v, want 3", body["max_consecutive_failures"])
+	if dirtyThreshold, ok := body["cache_flush_dirty_threshold"].(float64); !ok || dirtyThreshold != 1000 {
+		t.Errorf("cache_flush_dirty_threshold: got %v, want 1000", body["cache_flush_dirty_threshold"])
 	}
 
 	if _, ok := body["default_platform_config"]; ok {
@@ -379,8 +379,8 @@ func TestSystemDefaultConfig_OK(t *testing.T) {
 	if body["request_log_enabled"] != true {
 		t.Errorf("request_log_enabled: got %v, want true", body["request_log_enabled"])
 	}
-	if maxFail, ok := body["max_consecutive_failures"].(float64); !ok || maxFail != 3 {
-		t.Errorf("max_consecutive_failures: got %v, want 3", body["max_consecutive_failures"])
+	if dirtyThreshold, ok := body["cache_flush_dirty_threshold"].(float64); !ok || dirtyThreshold != 1000 {
+		t.Errorf("cache_flush_dirty_threshold: got %v, want 1000", body["cache_flush_dirty_threshold"])
 	}
 }
 

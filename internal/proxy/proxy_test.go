@@ -129,7 +129,7 @@ func TestRecordPassiveResultAsync_UsesPlatformAwareRecorder(t *testing.T) {
 	h := node.HashFromRawOptions([]byte(`{"type":"ss","n":"platform-aware"}`))
 	rec := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
 
-	recordPassiveResultAsync(rec, routing.RouteResult{
+	recordPassiveResult(rec, routing.RouteResult{
 		PlatformID: "plat-1",
 		NodeHash:   h,
 	}, false)

@@ -135,7 +135,7 @@ func prepareConnectTunnel(
 			// Record synchronously so the next request already sees the
 			// target restriction, independently of asynchronous global health.
 			deps.router.ReportTargetFailure(routed.Route, target)
-			recordPassiveResultAsync(deps.health, routed.Route, false)
+			recordPassiveResult(deps.health, routed.Route, false)
 			last = tunnelPrepareResult{
 				route:         routed.Route,
 				proxyErr:      proxyErr,
@@ -154,7 +154,7 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 	recordResult := func(result tunnelRelayResult) {
 		if result.upstreamFailure {
 			deps.router.ReportTargetFailure(routed.Route, target)
-			recordPassiveResultAsync(deps.health, routed.Route, false)
+			recordPassiveResult(deps.health, routed.Route, false)
 		}
 	}
 	var upstreamBase net.Conn = rawConn
@@ -164,7 +164,7 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 	}
 	upstreamConn := newTLSLatencyConn(upstreamBase, dialElapsed, func(latency time.Duration) {
 		deps.router.ReportTargetSuccess(routed.Route, target)
-		recordPassiveResultAsync(deps.health, routed.Route, true)
+		recordPassiveResult(deps.health, routed.Route, true)
 		if deps.health != nil {
 			deps.health.RecordPassiveLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), &latency)
 		}
@@ -318,9 +318,16 @@ func pumpPreparedTunnelReader(
 		evidence := observed.observation()
 		invalidResponse := evidence.invalidResponse || (evidence.truncatedResponse && firstEnded.Load() == 2)
 		noResponse := ingressResult.n == 0 && egressResult.n > 0
-		result.upstreamFailure = invalidResponse ||
+		incompleteHandshake := evidence.handshakeIncomplete && firstEnded.Load() == 2
+		result.upstreamFailure = invalidResponse || incompleteHandshake ||
 			(noResponse && firstEnded.Load() == 2 && (evidence.tlsRequest || opts.requireBidirectionalTraffic || !isBenignTunnelCopyError(evidence.readErr))) ||
 			(ingressResult.n == 0 && firstEnded.Load() == 1 && !isBenignTunnelCopyError(evidence.writeErr))
+		if incompleteHandshake && ingressResult.n > 0 && !invalidResponse {
+			result.netOK = false
+			result.proxyErr = ErrUpstreamRequestFailed
+			result.upstreamStage = "connect_tls_handshake_eof"
+			result.upstreamErr = evidence.readErr
+		}
 		if invalidResponse {
 			result.netOK = false
 			result.proxyErr = ErrUpstreamRequestFailed

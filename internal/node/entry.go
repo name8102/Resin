@@ -45,6 +45,8 @@ type NodeEntry struct {
 
 	// Atomic dynamic fields for concurrent hot-path reads.
 	FailureCount        atomic.Int32
+	BlacklistUntil      atomic.Int64               // unix-nano; cleared only after a successful active probe
+	BlacklistStrikes    atomic.Int32               // cumulative number of blacklist admissions
 	CircuitOpenSince    atomic.Int64               // unix-nano; 0 = not open
 	egressIP            atomic.Pointer[netip.Addr] // nil before first store
 	egressRegion        atomic.Pointer[string]     // lowercase country code from probe trace; nil when unknown
@@ -232,7 +234,7 @@ func matchesAny(s string, regexes []*regexp.Regexp) bool {
 
 // IsCircuitOpen returns true if the node is currently circuit-broken.
 func (e *NodeEntry) IsCircuitOpen() bool {
-	return e.CircuitOpenSince.Load() != 0
+	return e.CircuitOpenSince.Load() != 0 || e.BlacklistUntil.Load() != 0
 }
 
 // HasLatency returns true if the node has at least one latency record.

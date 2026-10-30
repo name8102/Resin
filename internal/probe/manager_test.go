@@ -25,7 +25,6 @@ func storeOutbound(entry *node.NodeEntry) {
 func TestProbeEgress_Success(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"egress-ok"}`))
@@ -83,7 +82,6 @@ func TestProbeEgress_Success(t *testing.T) {
 func TestProbeEgress_Failure(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"egress-fail"}`))
@@ -118,7 +116,6 @@ func TestProbeEgress_Failure(t *testing.T) {
 func TestProbeEgress_CircuitBreak(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"egress-circuit"}`))
@@ -149,7 +146,6 @@ func TestProbeEgress_CircuitBreak(t *testing.T) {
 func TestProbeLatency_Success(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"latency-ok"}`))
@@ -184,7 +180,6 @@ func TestProbeLatency_Success(t *testing.T) {
 func TestProbeLatency_Failure(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"latency-fail"}`))
@@ -215,7 +210,6 @@ func TestProbeLatency_Failure(t *testing.T) {
 func TestProbeEgress_ZeroLatencyIgnored(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"egress-zero-latency"}`))
@@ -251,7 +245,6 @@ func TestProbeEgress_ZeroLatencyIgnored(t *testing.T) {
 func TestProbeEgress_WithoutLoc_ClearsStoredRegion(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"egress-clear-loc"}`))
@@ -283,7 +276,6 @@ func TestProbeEgress_WithoutLoc_ClearsStoredRegion(t *testing.T) {
 func TestProbeLatency_ZeroLatencyIgnored(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"latency-zero"}`))
@@ -316,7 +308,6 @@ func TestProbeLatency_ZeroLatencyIgnored(t *testing.T) {
 func TestProbeEgress_NilFetcher(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"nil-fetcher"}`))
@@ -336,7 +327,6 @@ func TestProbeEgress_NilFetcher(t *testing.T) {
 func TestTriggerImmediateEgressProbe_WithFetcher(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"trigger-egress"}`))
@@ -381,7 +371,6 @@ func TestTriggerImmediateLatencyProbe_WithFetcher(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		SubLookup:              subMgr.Lookup,
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"trigger-latency"}`))
@@ -424,7 +413,6 @@ func TestScanEgress_SkipsDisabledNodes(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		SubLookup:              subMgr.Lookup,
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"scan-egress-disabled"}`))
@@ -462,7 +450,6 @@ func TestScanLatency_SkipsDisabledNodes(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		SubLookup:              subMgr.Lookup,
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"scan-latency-disabled"}`))
@@ -500,7 +487,6 @@ func TestQueuedAsyncProbe_SkipsNodeDisabledBeforeExecution(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		SubLookup:              subMgr.Lookup,
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"queued-disabled-before-execution"}`))
@@ -540,7 +526,6 @@ func TestQueuedAsyncProbe_SkipsNodeDisabledBeforeExecution(t *testing.T) {
 func TestProbeManager_StopWaitsImmediateProbe(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"stop-immediate"}`))
@@ -602,7 +587,6 @@ func TestProbeManager_StopWaitsImmediateProbe(t *testing.T) {
 func TestProbeQueue_DequeueChoosesNormalWhenSelectorRequests(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hashHigh := node.HashFromRawOptions([]byte(`{"type":"queue-high"}`))
@@ -657,7 +641,6 @@ func TestProbeQueue_DequeueChoosesNormalWhenSelectorRequests(t *testing.T) {
 func TestProbeQueue_HighUpgradeOfQueuedNormalRunsFirstWithoutExtraRun(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hashOther := node.HashFromRawOptions([]byte(`{"type":"queue-upgrade-other"}`))
@@ -730,7 +713,6 @@ func TestProbeQueue_HighUpgradeOfQueuedNormalRunsFirstWithoutExtraRun(t *testing
 func TestProbeQueue_FullDropsWithoutBlocking(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash1 := node.HashFromRawOptions([]byte(`{"type":"queue-full-1"}`))
@@ -755,7 +737,6 @@ func TestProbeQueue_FullDropsWithoutBlocking(t *testing.T) {
 func TestProbeSync_BypassesAsyncWorkerLimit(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hashAsync := node.HashFromRawOptions([]byte(`{"type":"sync-bypass-async"}`))
@@ -820,7 +801,6 @@ func TestProbeSync_BypassesAsyncWorkerLimit(t *testing.T) {
 func TestProbeLatencySync_ReturnsEWMAFromNormalizedDomain(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"latency-sync"}`))
@@ -862,7 +842,6 @@ func TestProbeLatencySync_ReturnsEWMAFromNormalizedDomain(t *testing.T) {
 func TestProbeSync_EmitsProbeEvents(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	hash := node.HashFromRawOptions([]byte(`{"type":"probe-sync-events"}`))
@@ -978,7 +957,6 @@ func TestIsLatencyProbeDue_HotAndColdNodes(t *testing.T) {
 func TestIsLatencyProbeDue_PassiveFailuresDoNotPostponeActiveProbe(t *testing.T) {
 	pool := topology.NewGlobalNodePool(topology.PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyAuthorities:     func() []string { return []string{"example.com"} },
 	})
 	raw := []byte(`{"type":"passive-failures"}`)

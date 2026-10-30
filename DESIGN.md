@@ -380,21 +380,20 @@ Platform 过滤时，通过 `NodeEntry.MatchTagFilter` 方法，反向查询 Ref
 ### 健康管理接口
 全局节点池提供一组线程安全的健康管理接口，供被动反馈与主动探测调用。这些接口是系统维护节点状态的唯一入口。
 
-* `RecordResult(id NodeHash, success bool)`：提交节点的一次网络请求结果。
-	* `success=true`：重置连续失败计数 (`FailureCount = 0`)。若节点当前处于熔断状态，立即恢复（`清空 CircuitOpenSince`）。
-	* `success=false`：原子递增连续失败计数。若计数达到配置的阈值 (`MaxConsecutiveFailures`)，触发熔断（`CircuitOpenSince = 当前时间`）。
-* `RecordPassiveResult(platformID string, id NodeHash, success bool)`：提交来自用户代理流量的被动网络结果。若对应 Platform 开启 `passive_circuit_breaker_disabled`，则忽略失败结果，不增加连续失败计数；成功结果仍作为正向健康反馈处理。
+* `RecordResult(id NodeHash, success bool)`：提交节点的一次网络请求结果。首次失败即将节点加入全局黑名单，并从所有 Platform 的可路由视图移除。成功结果不会提前解除黑名单。
+* `RecordResult(id NodeHash, success bool)`：提交主动探测结果。首次失败即加入全局黑名单；黑名单到期后，主动验证成功才恢复节点，验证失败则进入下一档黑名单。
+* `RecordPassiveResult(platformID string, id NodeHash, success bool)`：提交来自用户代理流量的被动网络结果。若对应 Platform 开启 `passive_circuit_breaker_disabled`，则忽略失败结果；否则首次可归因于节点的上游失败即加入全局黑名单。用户请求成功不会解除黑名单。
 * `RecordLatency(id NodeHash, domain string, latency *Duration)`：提交节点对特定域名的延迟探测尝试。`latency=nil` 表示“仅记录本次探测尝试，不写延迟样本”；`latency!=nil` 时按 TD-EWMA 更新延迟统计。无论 `latency` 是否为空，都会更新 `LastLatencyProbeAttempt`，若域名属于 `LatencyAuthorities` 还会更新 `LastAuthorityLatencyProbeAttempt`。如果调用本次 `RecordLatency` 之前，节点的 `LatencyTable` 为空，需要通知各 Platform 重新过滤这个节点。
 * `UpdateNodeEgressIP(id NodeHash, ip *netip.Addr)`：记录一次出口 IP 探测尝试并可选更新出口 IP。`ip=nil` 表示“仅记录尝试”；`ip!=nil` 时更新出口 IP（若变更则触发 Platform 脏更新）。无论 `ip` 是否为空，都会更新 `LastEgressUpdateAttempt`。
 
 ### 熔断与恢复机制
-Resin 使用计数器熔断机制保护系统稳定性。
-* 默认状态：新节点加入系统时默认是熔断状态。包括订阅同步创建的新节点，以及启动恢复时从 `nodes_static` 注入但尚未被 `nodes_dynamic` 覆盖的节点。（节点默认不熔断其实也能工作，因为进入平台路由池的条件还有“有出口”与“有延迟”，已经有这层兜底在了。把默认状态改成熔断其实是为了逻辑上更清晰。另外，把没准备好的节点与熔断分为一类。前端进行过滤的时候，不会在健康过滤器下看到“待测”状态）
-* 熔断触发：仅由 `RecordResult(id, false)` 触发。当连续失败次数 >= 阈值时，节点进入熔断状态。熔断的节点会立即从所有 Platform 的可路由视图中移除，不再承载用户流量。
-	* 用户代理流量通过 `RecordPassiveResult(platformID, id, false)` 上报失败；当对应 Platform 开启 `passive_circuit_breaker_disabled` 时，这类失败不会触发熔断。
-	* 主动探测仍直接使用 `RecordResult(id, false)`，不受 Platform 的 `passive_circuit_breaker_disabled` 影响。
-* 熔断恢复：熔断后的节点依然保留在全局池中，接受 ProbeManager 的主动探测。一旦 `RecordResult(id, true)` 被调用（通常由主动探测触发），节点立即恢复，重新加入可路由视图。
-* 熔断逻辑由全局代理池管理。禁止其他模块直接修改节点的熔断状态。
+Resin 使用节点全局黑名单隔离故障节点，不再设置连续失败次数阈值。
+* 默认状态：新节点加入系统时默认熔断，完成健康验证后才能进入可路由视图。
+* 黑名单触发：节点首次可归因的上游失败或主动探测失败即进入黑名单，立即从所有 Platform 的可路由视图移除，不再承载用户流量。黑名单按累计次数依次持续 1 小时、6 小时、24 小时，之后每次均为 24 小时。
+	* 用户代理流量通过 `RecordPassiveResult(platformID, id, false)` 上报失败；当对应 Platform 开启 `passive_circuit_breaker_disabled` 时，这类失败不触发黑名单。
+	* 主动探测通过 `RecordResult(id, false)` 上报失败，不受 Platform 的 `passive_circuit_breaker_disabled` 影响。
+* 黑名单恢复：黑名单期间暂停探测；到期后由 ProbeManager 主动验证，验证成功才解除黑名单并恢复路由，验证失败则进入下一档黑名单。到期本身及用户请求成功均不恢复节点。
+* 黑名单与熔断状态由全局代理池管理，其他模块通过健康管理接口提交结果。
 
 ### 延迟统计 (TD-EWMA)
 为了平滑网络抖动并保留时效性，系统使用 **TD-EWMA** 算法维护延迟。
@@ -425,7 +424,7 @@ Resin 使用计数器熔断机制保护系统稳定性。
 * 探测动作：对全局配置的延迟探测站点发起 HTTP GET 请求，优先测量 **TLS Handshake** 耗时；若未产生 TLS 握手事件（如连接复用或明文 HTTP），回退为请求级 RTT（请求发起到首字节/请求完成）。
 * 结果处理：
     * 成功：先调用 `RecordResult(true)`；调用 `RecordLatency(..., &latency)`（`latency<=0` 时仅记录尝试，不写样本）。
-    * 失败：调用 `RecordResult(false)` 与 `RecordLatency(..., nil)`。连续失败将导致节点熔断。
+    * 失败：调用 `RecordResult(false)` 与 `RecordLatency(..., nil)`。首次失败即触发节点全局黑名单。
 
 #### 主动探测的并发控制
 ProbeManager 采用 **双优先级队列 + 固定 worker 池** 的调度模型：
@@ -1067,7 +1066,6 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
   "reverse_proxy_log_req_body_max_bytes": 1024,
   "reverse_proxy_log_resp_headers_max_bytes": 1024,
   "reverse_proxy_log_resp_body_max_bytes": 1024,
-  "max_consecutive_failures": 3,
   "max_latency_test_interval": "1h",
   "max_authority_latency_test_interval": "3h",
   "max_egress_test_interval": "24h",
@@ -1094,7 +1092,6 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
   "reverse_proxy_log_req_body_max_bytes": 1024,
   "reverse_proxy_log_resp_headers_max_bytes": 1024,
   "reverse_proxy_log_resp_body_max_bytes": 1024,
-  "max_consecutive_failures": 3,
   "max_latency_test_interval": "1h",
   "max_authority_latency_test_interval": "3h",
   "max_egress_test_interval": "24h",
@@ -1240,7 +1237,7 @@ Body：
 * `regex_filters`：节点标签过滤规则列表，语义与校验见“节点标签过滤规则”。
 * `region_filters`：每项为 ISO 3166-1 alpha-2 小写代码。
 * 枚举字段：`reverse_proxy_miss_action` 仅 `TREAT_AS_EMPTY|REJECT`；`reverse_proxy_empty_account_behavior` 仅 `RANDOM|FIXED_HEADER|ACCOUNT_HEADER_RULE`；`allocation_policy` 仅 `BALANCED|PREFER_LOW_LATENCY|PREFER_IDLE_IP`。
-* `passive_circuit_breaker_disabled`：布尔值。设为 `true` 后，此 Platform 的用户代理请求失败不会增加节点熔断计数；主动探测不受影响。成功请求仍会清除节点连续失败计数并可恢复熔断节点。
+* `passive_circuit_breaker_disabled`：布尔值。设为 `true` 后，此 Platform 的用户代理请求失败不会触发节点黑名单；主动探测不受影响。用户请求成功不会解除黑名单，节点需在黑名单到期后通过主动验证才恢复。
 * 组合约束：当 `reverse_proxy_empty_account_behavior=FIXED_HEADER` 时，`reverse_proxy_fixed_account_header` 必填；其值支持多行，每行一个合法 HTTP Header 字段名（会按顺序尝试提取）。
 
 错误码映射（最小集）：
@@ -2398,7 +2395,6 @@ Resin 支持通过 API (`PATCH /system/config`) 动态调整大部分全局运�
 * `ReverseProxyLogRespBodyMaxBytes`: 记录响应体的最大字节数。默认 1KB。
 
 #### 健康检查参数
-* `MaxConsecutiveFailures`: 触发熔断的连续失败次数阈值。默认 3。
 * `MaxLatencyTestInterval`: 节点最大延迟探测间隔。最小 30 秒。默认 1 小时。
 * `MaxAuthorityLatencyTestInterval`: 权威域名（如 cloudflare.com）的最大延迟探测间隔。最小 30 秒。默认 3 小时。
 * `MaxEgressTestInterval`: 节点出口 IP 探测的最大间隔。最小 30 秒。默认 1 天。

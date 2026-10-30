@@ -432,7 +432,6 @@ func TestCreatePlatform_BuildsRoutableViewBeforePublish(t *testing.T) {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 
@@ -510,7 +509,6 @@ func TestCreatePlatform_RejectsReservedAPIName(t *testing.T) {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 
@@ -563,7 +561,6 @@ func TestDeleteSubscription_PersistFailureDoesNotMutateRuntimeState(t *testing.T
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 
@@ -619,7 +616,6 @@ func TestGetSubscription_NodeCountExcludesEvictedManagedNodes(t *testing.T) {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 
@@ -687,7 +683,6 @@ func TestGetSubscription_HealthyNodeCount_ExcludesDisabledSubscriptionNodes(t *t
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              func(netip.Addr) string { return "" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 	})
 
 	sub := subscription.NewSubscription("sub-disabled", "sub-disabled", "https://example.com/sub", false, false)
@@ -876,7 +871,6 @@ func TestDeletePlatform_DoesNotDecodeCorruptPersistedFiltersJSON(t *testing.T) {
 		SubLookup:              nil,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 	pool.RegisterPlatform(platform.NewConfiguredPlatform(
@@ -939,7 +933,6 @@ func TestResetPlatformToDefault_SupportsBuiltInDefaultPlatform(t *testing.T) {
 		SubLookup:              nil,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 	pool.RegisterPlatform(platform.NewConfiguredPlatform(
@@ -1081,7 +1074,6 @@ func TestResetPlatformToDefault_DoesNotDecodeCorruptPersistedFiltersJSON(t *test
 		SubLookup:              nil,
 		GeoLookup:              func(netip.Addr) string { return "us" },
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 	pool.RegisterPlatform(platform.NewConfiguredPlatform(

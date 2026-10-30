@@ -23,7 +23,6 @@ func TestEphemeralCleaner_TOCTOU_RecoveryBetweenScans(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	sub := subscription.NewSubscription("sub-toctou", "ephemeral-sub", "http://example.com", true, true)
@@ -80,7 +79,6 @@ func TestEphemeralCleaner_ConfirmedEviction(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	sub := subscription.NewSubscription("sub-evict", "ephemeral-sub", "http://example.com", true, true)
@@ -115,7 +113,6 @@ func TestEphemeralCleaner_NoOutboundErrorEvicted(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	sub := subscription.NewSubscription("sub-no-ob-err", "ephemeral-sub", "http://example.com", true, true)
@@ -147,7 +144,6 @@ func TestEphemeralCleaner_NoOutboundWithoutErrorSkipped(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	sub := subscription.NewSubscription("sub-no-ob-ok", "ephemeral-sub", "http://example.com", true, true)
@@ -169,7 +165,6 @@ func TestEphemeralCleaner_TOCTOU_NoOutboundErrorRecoveredBetweenScans(t *testing
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	sub := subscription.NewSubscription("sub-no-ob-toctou", "ephemeral-sub", "http://example.com", true, true)
@@ -206,7 +201,6 @@ func TestEphemeralCleaner_NonEphemeralSkipped(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	sub := subscription.NewSubscription("sub-persist", "persistent-sub", "http://example.com", true, false) // NOT ephemeral
@@ -237,7 +231,6 @@ func TestEphemeralCleaner_DynamicEvictDelayPulled(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	sub := subscription.NewSubscription("sub-dynamic", "ephemeral-sub", "http://example.com", true, true)
@@ -281,7 +274,6 @@ func TestEphemeralCleaner_SweepSubscriptionsInParallel(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
 		MaxLatencyTableEntries: 16,
-		MaxConsecutiveFailures: func() int { return 2 },
 	})
 
 	sub1 := subscription.NewSubscription("sub-1", "ephemeral-1", "http://example.com/1", true, true)

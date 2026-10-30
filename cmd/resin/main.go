@@ -227,9 +227,6 @@ func newTopologyRuntime(
 			engine.MarkNodeLatency(hash.Hex(), domain)
 		},
 		MaxLatencyTableEntries: envCfg.MaxLatencyTableEntries,
-		MaxConsecutiveFailures: func() int {
-			return runtimeConfigSnapshot(runtimeCfg).MaxConsecutiveFailures
-		},
 		LatencyDecayWindow: func() time.Duration {
 			return time.Duration(runtimeConfigSnapshot(runtimeCfg).LatencyDecayWindow)
 		},
@@ -507,6 +504,8 @@ func newFlushReaders(
 				Hash:                               hash,
 				FailureCount:                       int(entry.FailureCount.Load()),
 				CircuitOpenSince:                   entry.CircuitOpenSince.Load(),
+				BlacklistUntilNs:                   entry.BlacklistUntil.Load(),
+				BlacklistStrikes:                   int(entry.BlacklistStrikes.Load()),
 				EgressIP:                           egressStr,
 				EgressRegion:                       entry.GetEgressRegion(),
 				EgressUpdatedAtNs:                  entry.LastEgressUpdate.Load(),
@@ -840,6 +839,8 @@ func restoreBootstrapNodeDynamics(
 		}
 		entry.FailureCount.Store(int32(nd.FailureCount))
 		entry.CircuitOpenSince.Store(nd.CircuitOpenSince)
+		entry.BlacklistUntil.Store(nd.BlacklistUntilNs)
+		entry.BlacklistStrikes.Store(int32(nd.BlacklistStrikes))
 		entry.LastLatencyProbeAttempt.Store(nd.LastLatencyProbeAttemptNs)
 		entry.LastAuthorityLatencyProbeAttempt.Store(nd.LastAuthorityLatencyProbeAttemptNs)
 		entry.LastEgressUpdateAttempt.Store(nd.LastEgressUpdateAttemptNs)

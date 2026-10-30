@@ -78,7 +78,7 @@ func prepareHedgedConnectTunnel(ctx context.Context, deps tunnelDeps, platformNa
 	defer timer.Stop()
 	recordFailure := func(route routing.RouteResult) {
 		deps.router.ReportTargetFailure(route, target)
-		recordPassiveResultAsync(deps.health, route, false)
+		recordPassiveResult(deps.health, route, false)
 	}
 	for len(active) > 0 {
 		select {
