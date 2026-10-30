@@ -28,6 +28,7 @@ type PoolAccessor interface {
 
 // Router handles route selection and lease management.
 type Router struct {
+	targetFailures  targetFailureCache
 	pool            PoolAccessor
 	states          *xsync.Map[string, *PlatformRoutingState]
 	authorities     func() []string
@@ -77,19 +78,23 @@ const (
 	leaseInvalidationRemove
 )
 
-func (r *Router) RouteRequest(platName, account, target string) (RouteResult, error) {
+// RouteRequest selects a route, skipping nodes already attempted by this request.
+func (r *Router) RouteRequest(platName, account, target string, excluded ...node.Hash) (RouteResult, error) {
 	plat, err := r.resolvePlatform(platName)
 	if err != nil {
 		return RouteResult{}, err
 	}
 
-	targetDomain := netutil.ExtractDomain(target)
+	destination := routeTarget{
+		domain: netutil.ExtractDomain(target),
+		allows: r.targetFilter(plat, target, excluded),
+	}
 	state := r.ensurePlatformState(plat.ID)
 	var result RouteResult
 	if account == "" {
-		result, err = r.routeRandom(plat, state, targetDomain)
+		result, err = r.routeRandom(plat, state, destination)
 	} else {
-		result, err = r.routeSticky(plat, state, account, targetDomain, time.Now())
+		result, err = r.routeSticky(plat, state, account, destination, time.Now())
 	}
 	if err != nil {
 		return RouteResult{}, err
@@ -131,9 +136,9 @@ func (r *Router) ensurePlatformState(platformID string) *PlatformRoutingState {
 func (r *Router) routeRandom(
 	plat *platform.Platform,
 	state *PlatformRoutingState,
-	targetDomain string,
+	target routeTarget,
 ) (RouteResult, error) {
-	h, entry, err := r.selectLiveRandomRoute(plat, state.IPLoadStats, targetDomain)
+	h, entry, err := r.selectLiveRandomRoute(plat, state.IPLoadStats, target)
 	if err != nil {
 		return RouteResult{}, err
 	}
@@ -148,7 +153,7 @@ func (r *Router) routeSticky(
 	plat *platform.Platform,
 	state *PlatformRoutingState,
 	account string,
-	targetDomain string,
+	target routeTarget,
 	now time.Time,
 ) (RouteResult, error) {
 	nowNs := now.UnixNano()
@@ -160,7 +165,7 @@ func (r *Router) routeSticky(
 			plat,
 			state,
 			account,
-			targetDomain,
+			target,
 			now,
 			nowNs,
 			current,
@@ -181,7 +186,7 @@ func (r *Router) decideStickyLease(
 	plat *platform.Platform,
 	state *PlatformRoutingState,
 	account string,
-	targetDomain string,
+	target routeTarget,
 	now time.Time,
 	nowNs int64,
 	current Lease,
@@ -196,10 +201,10 @@ func (r *Router) decideStickyLease(
 	}
 
 	if loaded {
-		if newLease, hitResult, ok := r.tryLeaseHit(plat, account, current, nowNs); ok {
+		if newLease, hitResult, ok := r.tryLeaseHit(plat, account, current, target, nowNs); ok {
 			return newLease, xsync.UpdateOp, hitResult, nil
 		}
-		if newLease, rotatedResult, ok := r.tryLeaseSameIPRotation(plat, account, current, targetDomain, nowNs); ok {
+		if newLease, rotatedResult, ok := r.tryLeaseSameIPRotation(plat, account, current, target, nowNs); ok {
 			return newLease, xsync.UpdateOp, rotatedResult, nil
 		}
 		invalidation = leaseInvalidationRemove
@@ -209,7 +214,7 @@ func (r *Router) decideStickyLease(
 		plat,
 		state,
 		account,
-		targetDomain,
+		target,
 		now,
 		nowNs,
 		current,
@@ -222,14 +227,14 @@ func (r *Router) createOrAbortStickyLease(
 	plat *platform.Platform,
 	state *PlatformRoutingState,
 	account string,
-	targetDomain string,
+	target routeTarget,
 	now time.Time,
 	nowNs int64,
 	previous Lease,
 	hadPreviousLease bool,
 	invalidation leaseInvalidationReason,
 ) (Lease, xsync.ComputeOp, RouteResult, error) {
-	newLease, createdResult, err := r.createLease(plat, state, targetDomain, now, nowNs)
+	newLease, createdResult, err := r.createLease(plat, state, target, now, nowNs)
 	if err != nil {
 		r.cleanupPreviousLease(state, previous, hadPreviousLease, invalidation, plat.ID, account)
 		lease, op := abortLeaseCreate(previous, hadPreviousLease)
@@ -252,10 +257,11 @@ func (r *Router) tryLeaseHit(
 	plat *platform.Platform,
 	account string,
 	current Lease,
+	target routeTarget,
 	nowNs int64,
 ) (Lease, RouteResult, bool) {
 	entry, ok := r.pool.GetEntry(current.NodeHash)
-	if !ok || !plat.View().Contains(current.NodeHash) || entry.GetEgressIP() != current.EgressIP {
+	if !ok || !target.allows(current.NodeHash) || !plat.View().Contains(current.NodeHash) || entry.GetEgressIP() != current.EgressIP {
 		return Lease{}, RouteResult{}, false
 	}
 
@@ -279,16 +285,17 @@ func (r *Router) tryLeaseSameIPRotation(
 	plat *platform.Platform,
 	account string,
 	current Lease,
-	targetDomain string,
+	target routeTarget,
 	nowNs int64,
 ) (Lease, RouteResult, bool) {
 	bestHash, ok := chooseSameIPRotationCandidate(
 		plat,
 		r.pool,
 		current.EgressIP,
-		targetDomain,
+		target.domain,
 		r.authorities(),
 		r.p2cWindow(),
+		target.allows,
 	)
 	if !ok {
 		return Lease{}, RouteResult{}, false
@@ -314,11 +321,11 @@ func (r *Router) tryLeaseSameIPRotation(
 func (r *Router) createLease(
 	plat *platform.Platform,
 	state *PlatformRoutingState,
-	targetDomain string,
+	target routeTarget,
 	now time.Time,
 	nowNs int64,
 ) (Lease, RouteResult, error) {
-	h, entry, err := r.selectLiveRandomRoute(plat, state.IPLoadStats, targetDomain)
+	h, entry, err := r.selectLiveRandomRoute(plat, state.IPLoadStats, target)
 	if err != nil {
 		return Lease{}, RouteResult{}, err
 	}
@@ -391,11 +398,11 @@ func (r *Router) emitLeaseEvent(event LeaseEvent) {
 func (r *Router) selectLiveRandomRoute(
 	plat *platform.Platform,
 	stats *IPLoadStats,
-	targetDomain string,
+	target routeTarget,
 ) (node.Hash, *node.NodeEntry, error) {
 	var lastMissing node.Hash
 	for i := 0; i < livePickAttempts; i++ {
-		h, err := randomRoute(plat, stats, r.pool, targetDomain, r.authorities(), r.p2cWindow())
+		h, err := randomRoute(plat, stats, r.pool, target.domain, r.authorities(), r.p2cWindow(), target.allows)
 		if err != nil {
 			return node.Zero, nil, err
 		}
@@ -418,12 +425,16 @@ func chooseSameIPRotationCandidate(
 	targetDomain string,
 	authorities []string,
 	window time.Duration,
+	allows func(node.Hash) bool,
 ) (node.Hash, bool) {
 	bestKnownHash := node.Zero
 	bestKnownLatency := time.Duration(math.MaxInt64)
 	fallbackHash := node.Zero
 
 	plat.View().Range(func(h node.Hash) bool {
+		if allows != nil && !allows(h) {
+			return true
+		}
 		entry, ok := pool.GetEntry(h)
 		if !ok || entry.GetEgressIP() != targetIP {
 			return true

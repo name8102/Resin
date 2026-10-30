@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/Resinat/Resin/internal/netutil"
+	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/routing"
 )
@@ -228,41 +229,77 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var route routing.RouteResult
 	var hasRoute bool
-	var transport *http.Transport
-	if p.bypass != nil && p.bypass.ShouldBypass(r.Host) {
-		transport = p.directHTTPTransport()
-	} else {
-		routed, routeErr := resolveRoutedOutbound(p.router, p.pool, platName, account, r.Host)
-		if routeErr != nil {
-			lifecycle.setProxyError(routeErr)
-			lifecycle.setHTTPStatus(routeErr.HTTPCode)
-			writeProxyError(w, routeErr)
-			return
-		}
-		route = routed.Route
-		hasRoute = true
-		lifecycle.setRouteResult(route)
-		if p.health != nil {
-			go p.health.RecordLatency(route.NodeHash, netutil.ExtractDomain(r.Host), nil)
-		}
-		transport = p.outboundHTTPTransport(routed)
-	}
-	outReq := prepareForwardOutboundRequest(r)
-	upstreamTrace := newUpstreamRequestTrace(lifecycle.markFirstByteReceived)
-	outReq = outReq.WithContext(httptrace.WithClientTrace(outReq.Context(), upstreamTrace.clientTrace()))
-	pendingEgressHeaderBytes := headerWireLen(outReq.Header)
-	var egressBodyCounter *countingReadCloser
-	if outReq.Body != nil && outReq.Body != http.NoBody {
-		egressBodyCounter = newCountingReadCloser(outReq.Body)
-		outReq.Body = egressBodyCounter
+	var resp *http.Response
+	var err error
+	var excluded []node.Hash
+	target := r.URL.Scheme + "://" + r.Host
+	direct := p.bypass != nil && p.bypass.ShouldBypass(r.Host)
+	attempts := maxConnectAttempts
+	// A request body may already be closed by Transport on a dial failure.
+	// Do not replay uploads or other body-bearing requests.
+	if direct || (r.Body != nil && r.Body != http.NoBody) {
+		attempts = 1
 	}
 
-	// Forward the request.
-	resp, err := transport.RoundTrip(outReq)
-	if upstreamTrace.shouldCommitEgress() {
-		lifecycle.addEgressBytes(pendingEgressHeaderBytes)
-		if egressBodyCounter != nil {
-			lifecycle.addEgressBytes(egressBodyCounter.Total())
+	for attempt := 0; attempt < attempts; attempt++ {
+		if r.Context().Err() != nil {
+			err = r.Context().Err()
+			break
+		}
+		var transport *http.Transport
+		if direct {
+			transport = p.directHTTPTransport()
+		} else {
+			routed, routeErr := resolveRoutedOutbound(p.router, p.pool, platName, account, target, excluded...)
+			if routeErr != nil {
+				// Preserve the last actual upstream failure.
+				if err != nil {
+					break
+				}
+				lifecycle.setProxyError(routeErr)
+				lifecycle.setHTTPStatus(routeErr.HTTPCode)
+				writeProxyError(w, routeErr)
+				return
+			}
+			route = routed.Route
+			hasRoute = true
+			excluded = append(excluded, route.NodeHash)
+			lifecycle.setRouteResult(route)
+			if p.health != nil {
+				go p.health.RecordLatency(route.NodeHash, netutil.ExtractDomain(r.Host), nil)
+			}
+			transport = p.outboundHTTPTransport(routed)
+		}
+		outReq := prepareForwardOutboundRequest(r)
+		upstreamTrace := newUpstreamRequestTrace(lifecycle.markFirstByteReceived)
+		outReq = outReq.WithContext(httptrace.WithClientTrace(outReq.Context(), upstreamTrace.clientTrace()))
+		pendingEgressHeaderBytes := headerWireLen(outReq.Header)
+		var egressBodyCounter *countingReadCloser
+		if outReq.Body != nil && outReq.Body != http.NoBody {
+			egressBodyCounter = newCountingReadCloser(outReq.Body)
+			outReq.Body = egressBodyCounter
+		}
+		resp, err = transport.RoundTrip(outReq)
+		if upstreamTrace.shouldCommitEgress() {
+			lifecycle.addEgressBytes(pendingEgressHeaderBytes)
+			if egressBodyCounter != nil {
+				lifecycle.addEgressBytes(egressBodyCounter.Total())
+			}
+		}
+		if err == nil {
+			break
+		}
+		if r.Context().Err() != nil || classifyUpstreamError(err) == nil {
+			break
+		}
+		if hasRoute {
+			p.router.ReportTargetFailure(route, target)
+			recordPassiveResultAsync(p.health, route, false)
+		}
+		// Once Transport acquired a connection, request bytes may have been
+		// sent. Retrying could duplicate a side effect, even without a body.
+		if upstreamTrace.gotConn.Load() {
+			break
 		}
 	}
 	if err != nil {
@@ -277,9 +314,6 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		lifecycle.setProxyError(proxyErr)
 		lifecycle.setUpstreamError("forward_roundtrip", err)
 		lifecycle.setHTTPStatus(proxyErr.HTTPCode)
-		if hasRoute {
-			recordPassiveResultAsync(p.health, route, false)
-		}
 		writeProxyError(w, proxyErr)
 		return
 	}

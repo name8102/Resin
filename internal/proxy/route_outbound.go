@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/routing"
 	"github.com/sagernet/sing-box/adapter"
@@ -17,8 +18,9 @@ func resolveRoutedOutbound(
 	platformName string,
 	account string,
 	target string,
+	excluded ...node.Hash,
 ) (routedOutbound, *ProxyError) {
-	result, err := router.RouteRequest(platformName, account, target)
+	result, err := router.RouteRequest(platformName, account, target, excluded...)
 	if err != nil {
 		return routedOutbound{}, mapRouteError(err)
 	}

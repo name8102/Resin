@@ -96,7 +96,9 @@ func (p *OutboundTransportPool) CloseAll() {
 func (p *OutboundTransportPool) newReusableOutboundTransport(ob adapter.Outbound, sink MetricsEventSink) *http.Transport {
 	return &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := ob.DialContext(ctx, network, M.ParseSocksaddr(addr))
+			attemptCtx, cancel := context.WithTimeout(ctx, connectAttemptTimeout)
+			defer cancel()
+			conn, err := ob.DialContext(attemptCtx, network, M.ParseSocksaddr(addr))
 			if err != nil {
 				return nil, err
 			}

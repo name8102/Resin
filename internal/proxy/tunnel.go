@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/netutil"
+	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/routing"
 	M "github.com/sagernet/sing/common/metadata"
@@ -65,6 +66,11 @@ func (r *firstByteReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+const (
+	maxConnectAttempts    = 3
+	connectAttemptTimeout = 5 * time.Second
+)
+
 func prepareConnectTunnel(
 	ctx context.Context,
 	deps tunnelDeps,
@@ -76,62 +82,77 @@ func prepareConnectTunnel(
 		return prepareDirectConnectTunnel(ctx, deps, target)
 	}
 
-	routed, routeErr := resolveRoutedOutbound(deps.router, deps.pool, platformName, account, target)
-	if routeErr != nil {
-		return tunnelPrepareResult{proxyErr: routeErr}
-	}
-
-	domain := netutil.ExtractDomain(target)
-	nodeHashRaw := routed.Route.NodeHash
-	if deps.health != nil {
-		go deps.health.RecordLatency(nodeHashRaw, domain, nil)
-	}
-
-	rawConn, err := routed.Outbound.DialContext(ctx, "tcp", M.ParseSocksaddr(target))
-	if err != nil {
-		proxyErr := classifyConnectError(err)
-		if proxyErr == nil {
-			return tunnelPrepareResult{
-				route:    routed.Route,
-				canceled: true,
+	var excluded []node.Hash
+	var last tunnelPrepareResult
+	for attempt := 0; attempt < maxConnectAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return tunnelPrepareResult{route: last.route, proxyErr: classifyConnectError(err), canceled: true}
+		}
+		routed, routeErr := resolveRoutedOutbound(deps.router, deps.pool, platformName, account, target, excluded...)
+		if routeErr != nil {
+			if last.proxyErr != nil {
+				return last
 			}
+			return tunnelPrepareResult{proxyErr: routeErr}
 		}
+		excluded = append(excluded, routed.Route.NodeHash)
+		domain := netutil.ExtractDomain(target)
+		nodeHashRaw := routed.Route.NodeHash
 		if deps.health != nil {
-			recordPassiveResultAsync(deps.health, routed.Route, false)
+			go deps.health.RecordLatency(nodeHashRaw, domain, nil)
 		}
-		return tunnelPrepareResult{
-			route:         routed.Route,
-			proxyErr:      proxyErr,
-			upstreamStage: "connect_dial",
-			upstreamErr:   err,
-		}
-	}
 
-	recordResult := func(ok bool) {
-		if deps.health != nil {
+		// Bound each attempt even when the caller (notably SOCKS5) has no
+		// deadline. This deadline ends at dial; it does not limit the relay.
+		attemptCtx, cancel := context.WithTimeout(ctx, connectAttemptTimeout)
+		rawConn, err := routed.Outbound.DialContext(attemptCtx, "tcp", M.ParseSocksaddr(target))
+		cancel()
+		if ctx.Err() != nil {
+			if rawConn != nil {
+				_ = rawConn.Close()
+			}
+			return tunnelPrepareResult{route: routed.Route, proxyErr: classifyConnectError(ctx.Err()), canceled: true}
+		}
+		if err != nil {
+			if rawConn != nil {
+				_ = rawConn.Close()
+			}
+			proxyErr := classifyConnectError(err)
+			if proxyErr == nil {
+				return tunnelPrepareResult{route: routed.Route, canceled: true}
+			}
+			// Record synchronously so the next request already sees the
+			// target restriction, independently of asynchronous global health.
+			deps.router.ReportTargetFailure(routed.Route, target)
+			recordPassiveResultAsync(deps.health, routed.Route, false)
+			last = tunnelPrepareResult{
+				route:         routed.Route,
+				proxyErr:      proxyErr,
+				upstreamStage: "connect_dial",
+				upstreamErr:   err,
+			}
+			continue
+		}
+
+		recordResult := func(ok bool) {
 			recordPassiveResultAsync(deps.health, routed.Route, ok)
 		}
-	}
-
-	var upstreamBase net.Conn = rawConn
-	if deps.metricsSink != nil {
-		deps.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)
-		upstreamBase = newCountingConn(rawConn, deps.metricsSink)
-	}
-
-	upstreamConn := newTLSLatencyConn(upstreamBase, func(latency time.Duration) {
-		if deps.health != nil {
-			deps.health.RecordLatency(nodeHashRaw, domain, &latency)
+		var upstreamBase net.Conn = rawConn
+		if deps.metricsSink != nil {
+			deps.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)
+			upstreamBase = newCountingConn(rawConn, deps.metricsSink)
 		}
-	})
-
-	return tunnelPrepareResult{
-		route: routed.Route,
-		session: &preparedTunnel{
-			upstreamConn: upstreamConn,
-			recordResult: recordResult,
-		},
+		upstreamConn := newTLSLatencyConn(upstreamBase, func(latency time.Duration) {
+			if deps.health != nil {
+				deps.health.RecordLatency(nodeHashRaw, domain, &latency)
+			}
+		})
+		return tunnelPrepareResult{
+			route:   routed.Route,
+			session: &preparedTunnel{upstreamConn: upstreamConn, recordResult: recordResult},
+		}
 	}
+	return last
 }
 
 func prepareDirectConnectTunnel(ctx context.Context, deps tunnelDeps, target string) tunnelPrepareResult {

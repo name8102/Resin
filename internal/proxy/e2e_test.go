@@ -26,6 +26,7 @@ import (
 )
 
 type proxyE2EEnv struct {
+	subMgr *topology.SubscriptionManager
 	pool   *topology.GlobalNodePool
 	router *routing.Router
 }
@@ -85,6 +86,7 @@ func newProxyE2EEnv(t *testing.T) *proxyE2EEnv {
 	})
 
 	return &proxyE2EEnv{
+		subMgr: subMgr,
 		pool:   pool,
 		router: router,
 	}

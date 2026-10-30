@@ -30,6 +30,7 @@ func randomRoute(
 	targetDomain string,
 	authorities []string,
 	p2cWindow time.Duration,
+	allows func(node.Hash) bool,
 ) (node.Hash, error) {
 	view := plat.View()
 	size := view.Size()
@@ -41,7 +42,31 @@ func randomRoute(
 	defer randomRouteRNGPool.Put(rng)
 
 	pick := func() (node.Hash, bool) {
-		return view.RandomPick(rng)
+		// Keep ordinary picks O(1). With many cooled-down nodes, a reservoir
+		// fallback still finds the remaining candidate instead of returning a
+		// spurious no-nodes error after random misses.
+		for i := 0; i < 8; i++ {
+			h, ok := view.RandomPick(rng)
+			if !ok {
+				return node.Zero, false
+			}
+			if allows == nil || allows(h) {
+				return h, true
+			}
+		}
+		var selected node.Hash
+		count := 0
+		view.Range(func(h node.Hash) bool {
+			if allows != nil && !allows(h) {
+				return true
+			}
+			count++
+			if rng.IntN(count) == 0 {
+				selected = h
+			}
+			return true
+		})
+		return selected, count > 0
 	}
 
 	// Pick 1st candidate.
