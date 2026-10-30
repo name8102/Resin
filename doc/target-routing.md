@@ -16,7 +16,7 @@ Global probe health therefore remains separate from passive target failures.
   an older successful tunnel does not clear the cooldown.
 - Cooldowns live only in memory, are capped at 8,192 entries, and expire lazily.
   They are ignored when a platform disables passive circuit breaking.
-- Anonymous CONNECT/SOCKS5 connections hedge at most three distinct nodes,
+- Anonymous CONNECT/SOCKS5 connections hedge at most eight distinct nodes,
   starting backups 200 ms apart within a shared 4.3-second dial budget. The
   first successful connection wins; canceled or late candidates are closed.
 - Account-bound tunnels retain sequential failover and same-egress-IP priority,

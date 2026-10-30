@@ -86,7 +86,7 @@ func TestPrepareConnectTunnel_KeepsTargetFailureAfterProbeSuccess(t *testing.T) 
 	}
 }
 
-func TestPrepareConnectTunnel_ThreeDistinctAttempts(t *testing.T) {
+func TestPrepareConnectTunnel_BoundedDistinctAnonymousAttempts(t *testing.T) {
 	env := newProxyE2EEnv(t)
 	// Explicit exclusions must work even when persistent passive penalties are off.
 	p, _ := env.pool.GetPlatform("plat-id")
@@ -104,15 +104,15 @@ func TestPrepareConnectTunnel_ThreeDistinctAttempts(t *testing.T) {
 		}
 	}
 	setProxyE2EOutboundDialFunc(t, env, dial("first"))
-	for i := 0; i < 4; i++ {
+	for i := 0; i < maxAnonymousConnectAttempts+1; i++ {
 		addRetryNode(t, env, fmt.Sprint(i), fmt.Sprintf("203.0.113.%d", 20+i), dial(fmt.Sprint(i)))
 	}
 	result := prepareConnectTunnel(context.Background(), tunnelDeps{router: env.router, pool: env.pool}, "plat", "", "api.github.com:443")
 	if result.proxyErr != ErrUpstreamConnectFailed || result.upstreamStage != "connect_dial" {
 		t.Fatalf("lost upstream failure: %+v", result)
 	}
-	if calls.Load() != 3 || len(seen) != 3 {
-		t.Fatalf("attempts=%d distinct=%d, want 3", calls.Load(), len(seen))
+	if int(calls.Load()) != maxAnonymousConnectAttempts || len(seen) != maxAnonymousConnectAttempts {
+		t.Fatalf("attempts=%d distinct=%d, want %d", calls.Load(), len(seen), maxAnonymousConnectAttempts)
 	}
 	for id, n := range seen {
 		if n != 1 {
@@ -310,5 +310,42 @@ func TestPrepareConnectTunnel_AnonymousHandshakeKeepsFullWindow(t *testing.T) {
 	result := prepareConnectTunnel(context.Background(), tunnelDeps{router: env.router, pool: env.pool}, "plat", "", "api.github.com:443")
 	if result.session == nil {
 		t.Fatalf("healthy slower handshake was rejected: %+v", result)
+	}
+}
+
+func TestPrepareConnectTunnel_HedgesPastThreeStalledNodes(t *testing.T) {
+	env := newProxyE2EEnv(t)
+	started := make(chan struct{}, 3)
+	stalled := func(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	setProxyE2EOutboundDialFunc(t, env, stalled)
+	addRetryNode(t, env, "stalled-two", "203.0.113.2", stalled)
+	addRetryNode(t, env, "stalled-three", "203.0.113.3", stalled)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resultCh := make(chan tunnelPrepareResult, 1)
+	go func() {
+		resultCh <- prepareConnectTunnel(ctx, tunnelDeps{router: env.router, pool: env.pool}, "plat", "", "api.github.com:443")
+	}()
+	// Each stalled candidate signals its start; the fourth becomes available
+	// only after the first three have launched, reproducing a bad ranked prefix.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("first three candidates did not start")
+		}
+	}
+	good := addRetryNode(t, env, "fourth-working", "203.0.113.4", func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		a, b := net.Pipe()
+		t.Cleanup(func() { a.Close(); b.Close() })
+		return a, nil
+	})
+	result := <-resultCh
+	if result.session == nil || result.route.NodeHash != good {
+		t.Fatalf("failed to try working fourth candidate: %+v", result)
 	}
 }

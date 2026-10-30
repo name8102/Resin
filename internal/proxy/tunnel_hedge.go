@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	anonymousConnectBudget = 4300 * time.Millisecond
-	connectHedgeDelay      = 200 * time.Millisecond
+	maxAnonymousConnectAttempts = 8
+	anonymousConnectBudget      = 4300 * time.Millisecond
+	connectHedgeDelay           = 200 * time.Millisecond
 )
 
 type connectCandidate struct {
@@ -100,12 +101,12 @@ func prepareHedgedConnectTunnel(ctx context.Context, deps tunnelDeps, platformNa
 			if proxyErr != nil {
 				recordFailure(candidate.routed.Route)
 			}
-			if len(excluded) < maxConnectAttempts && !exhausted {
+			if len(excluded) < maxAnonymousConnectAttempts && !exhausted {
 				launch()
 				timer.Reset(connectHedgeDelay)
 			}
 		case <-timer.C:
-			if len(excluded) < maxConnectAttempts && !exhausted {
+			if len(excluded) < maxAnonymousConnectAttempts && !exhausted {
 				launch()
 				timer.Reset(connectHedgeDelay)
 			}
