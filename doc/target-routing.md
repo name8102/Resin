@@ -9,11 +9,15 @@ Global probe health therefore remains separate from passive target failures.
 - Cooldowns live only in memory, are capped at 8,192 entries, and expire lazily.
   They are ignored when a platform disables passive circuit breaking.
 - CONNECT and SOCKS5 try at most three distinct nodes before acknowledging the
-  tunnel. Each dial has a five-second timeout; a caller's earlier deadline wins.
+  tunnel. Each dial has a 1.4-second timeout, keeping all three attempts below
+  Mihomo's five-second SOCKS dial budget; a caller's earlier deadline wins.
   Sticky routes still prefer another node with the same egress IP.
 - Plain HTTP can also fail over before obtaining an upstream connection, but
   body-bearing requests are never replayed. Once a connection is acquired, no
   cross-node replay occurs, even for requests without a body.
+- HTTP upstream CONNECT handshakes honor the dial context through their final
+  response, not just the initial TCP connection; successful tunnels have their
+  temporary deadline and cancellation hook removed.
 - Client cancellation and local CONNECT response/hijack errors do not create
   target cooldowns. Established tunnels are never replayed or cut off by a dial
   timeout.

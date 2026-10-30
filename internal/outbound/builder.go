@@ -10,6 +10,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	sbOutbound "github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
@@ -115,6 +116,7 @@ func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, err
 	}
 
 	registry := service.FromContext[adapter.OutboundRegistry](ctx).(*sbOutbound.Registry)
+	sbOutbound.Register[option.HTTPOutboundOptions](registry, C.TypeHTTP, newHTTPContextOutbound)
 
 	return &SingboxBuilder{
 		registry:            registry,

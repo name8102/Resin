@@ -67,8 +67,10 @@ func (r *firstByteReader) Read(p []byte) (int, error) {
 }
 
 const (
-	maxConnectAttempts    = 3
-	connectAttemptTimeout = 5 * time.Second
+	maxConnectAttempts = 3
+	// Mihomo's SOCKS dial budget is five seconds. Leave time for all three
+	// attempts and the SOCKS response, rather than spending it on one node.
+	connectAttemptTimeout = 1400 * time.Millisecond
 )
 
 func prepareConnectTunnel(

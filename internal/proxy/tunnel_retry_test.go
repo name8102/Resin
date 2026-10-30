@@ -230,3 +230,24 @@ func TestSocks5Inbound_RetriesBeforeSuccessReply(t *testing.T) {
 		t.Fatal("SOCKS5 relay did not close")
 	}
 }
+
+func TestPrepareConnectTunnel_AllAttemptsFitClientDialBudget(t *testing.T) {
+	env := newProxyE2EEnv(t)
+	// Reproduce the downstream client's five-second SOCKS handshake deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var calls atomic.Int32
+	stalled := func(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+		calls.Add(1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	setProxyE2EOutboundDialFunc(t, env, stalled)
+	addRetryNode(t, env, "slow-2", "203.0.113.12", stalled)
+	addRetryNode(t, env, "slow-3", "203.0.113.13", stalled)
+	started := time.Now()
+	result := prepareConnectTunnel(ctx, tunnelDeps{router: env.router, pool: env.pool}, "plat", "", "api.github.com:443")
+	if calls.Load() != 3 || ctx.Err() != nil || result.proxyErr != ErrUpstreamTimeout {
+		t.Fatalf("retry budget exhausted client's deadline: calls=%d ctx=%v result=%+v elapsed=%v", calls.Load(), ctx.Err(), result, time.Since(started))
+	}
+}
