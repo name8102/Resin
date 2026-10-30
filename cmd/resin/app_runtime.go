@@ -319,6 +319,7 @@ func (a *resinApp) initObservability() error {
 	if err := a.requestlogRepo.Open(); err != nil {
 		return fmt.Errorf("requestlog repo open: %w", err)
 	}
+	restoreRouteHistory(a.requestlogRepo, a.topoRuntime.router)
 	a.requestlogSvc = requestlog.NewService(requestlog.ServiceConfig{
 		Repo:          a.requestlogRepo,
 		QueueSize:     requestLogCfg.QueueSize,

@@ -132,13 +132,22 @@ func TestTargetSuccess_PrefersExactOriginAndPlatform(t *testing.T) {
 	reportSelectedSuccess(t, r, p, good, "API.GitHub.COM.:443")
 	for target, want := range map[string]node.Hash{
 		"https://api.github.com/path": good,
-		"api.github.com:80":           fast,
-		"github.com:443":              fast,
-		"uploads.github.com:443":      fast,
+		"api.github.com:80":           good,
+		"github.com:443":              good,
+		"uploads.github.com:443":      good,
 	} {
-		route, err := r.RouteRequest(p.Name, "", target)
-		if err != nil || route.NodeHash != want {
-			t.Fatalf("target %q: got %s, want %s, err=%v", target, route.NodeHash.Hex(), want.Hex(), err)
+		preferred := 0
+		for i := 0; i < 256; i++ {
+			route, err := r.RouteRequest(p.Name, "", target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if route.NodeHash == want {
+				preferred++
+			}
+		}
+		if preferred < 230 {
+			t.Fatalf("target %q: preferred working node selected %d/256", target, preferred)
 		}
 	}
 	other := platform.NewPlatform("other-platform", "Other", nil, nil)
@@ -150,7 +159,7 @@ func TestTargetSuccess_PrefersExactOriginAndPlatform(t *testing.T) {
 	}
 }
 
-func TestTargetSuccess_StableWinsAndSharesThreeBestScores(t *testing.T) {
+func TestTargetSuccess_PrefersBestThreeButCanExploreFourth(t *testing.T) {
 	r, pool, p, first := targetTestRouter(t)
 	p.AllocationPolicy = platform.AllocationPolicyPreferLowLatency
 	hashes := []node.Hash{first}
@@ -173,27 +182,31 @@ func TestTargetSuccess_StableWinsAndSharesThreeBestScores(t *testing.T) {
 	}
 	// The slowest node has two recent responses; all faster nodes have only one.
 	reportSelectedSuccess(t, r, p, hashes[3], "api.github.com:443")
-	for i := 0; i < 10; i++ {
-		route, err := r.RouteRequest(p.Name, "", "api.github.com:443")
-		if err != nil || route.NodeHash != hashes[3] {
-			t.Fatalf("stable evidence lost to one response: %v %v", route, err)
-		}
-	}
-	for _, h := range hashes[:3] {
-		reportSelectedSuccess(t, r, p, h, "api.github.com:443")
-	}
-	seen := make(map[node.Hash]int)
-	for i := 0; i < 120; i++ {
+	primary := 0
+	for i := 0; i < 2048; i++ {
 		route, err := r.RouteRequest(p.Name, "", "api.github.com:443")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if route.NodeHash == hashes[3] {
-			t.Fatal("selected clearly worse fourth stable candidate")
+			primary++
+		}
+	}
+	if primary < 1840 || primary == 2048 {
+		t.Fatalf("stable primary/trial balance: %d/2048", primary)
+	}
+	for _, h := range hashes[:3] {
+		reportSelectedSuccess(t, r, p, h, "api.github.com:443")
+	}
+	seen := make(map[node.Hash]int)
+	for i := 0; i < 2048; i++ {
+		route, err := r.RouteRequest(p.Name, "", "api.github.com:443")
+		if err != nil {
+			t.Fatal(err)
 		}
 		seen[route.NodeHash]++
 	}
-	if len(seen) != 3 {
+	if len(seen) != 4 || seen[hashes[3]] > 200 {
 		t.Fatalf("stable pool did not share connections: %v", seen)
 	}
 	route, err := r.RouteRequest(p.Name, "account", "api.github.com:443")

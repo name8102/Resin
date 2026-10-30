@@ -18,11 +18,39 @@ var randomRouteRNGPool = sync.Pool{
 	},
 }
 
-// randomRoute chooses among nodes with the strongest recent reachability
-// evidence: exact-origin responses first, domain latency and authority probes
-// next, unknown nodes before origins with retained failures.
-// Anonymous requests have no lease load, so random P2C otherwise keeps sending
-// traffic to untested nodes even while known-working target routes exist.
+const (
+	preferredCandidates       = 3
+	maxRankedCandidates       = 12
+	candidateExplorationEvery = 32
+	passiveSpeedWindow        = 30 * time.Minute
+)
+
+type routeCandidate struct {
+	hash  node.Hash
+	tier  int
+	score float64
+}
+
+func betterCandidate(a, b routeCandidate) bool {
+	if a.tier != b.tier {
+		return a.tier > b.tier
+	}
+	if a.score != b.score {
+		return a.score < b.score
+	}
+	// Cold-start ties are ranked deterministically, not sampled from the pool.
+	for i := range a.hash {
+		if a.hash[i] != b.hash[i] {
+			return a.hash[i] < b.hash[i]
+		}
+	}
+	return false
+}
+
+// randomRoute ranks the pool by real reachability before considering speed.
+// Most new connections share the three best proven candidates with score-based
+// weights. A 1/32 trial uses the next ranked, verified candidates; unknown or
+// failed origins never displace a working shortlist merely to explore.
 func randomRoute(
 	plat *platform.Platform,
 	stats *IPLoadStats,
@@ -34,32 +62,22 @@ func randomRoute(
 	evidence func(node.Hash) targetEvidence,
 ) (node.Hash, error) {
 	view := plat.View()
-	size := view.Size()
-	if size == 0 {
+	if view.Size() == 0 {
 		return node.Zero, ErrNoAvailableNodes
 	}
 	rng := randomRouteRNGPool.Get().(*rand.Rand)
 	defer randomRouteRNGPool.Put(rng)
 	now := time.Now()
-	bestTier := -2
-	bestScore := 0.0
-	ties := 0
-	selected := node.Zero
-	// Positive exact-origin evidence is shared across the three best policy
-	// scores, rather than pinning every anonymous connection to one old minimum.
-	type candidate struct {
-		hash  node.Hash
-		score float64
-	}
-	var candidates [3]candidate
-	candidateCount := 0
+	var ranked [maxRankedCandidates]routeCandidate
+	count := 0
 	view.Range(func(h node.Hash) bool {
 		if allows != nil && !allows(h) {
 			return true
 		}
-		// Preserve the single-node fast path. The caller rechecks liveness.
-		if size == 1 {
-			selected = h
+		// The caller rechecks a singleton for transient deletion, as before.
+		if view.Size() == 1 {
+			ranked[0] = routeCandidate{hash: h}
+			count = 1
 			return false
 		}
 		entry, ok := pool.GetEntry(h)
@@ -75,52 +93,85 @@ func randomRoute(
 		}
 		if evidence != nil {
 			health := evidence(h)
+			if health.proven > 0 {
+				tier = 3
+			}
+			if health.successes > 0 {
+				tier = 3 + health.successes
+			}
 			if health.failed {
 				tier = -1
 			}
-			if health.successes > 0 {
-				tier = 2 + health.successes
-			}
 		}
-		score := calculateScore(h, latency, plat, stats, pool)
-		if tier < bestTier {
-			return true
+		candidate := routeCandidate{h, tier, connectionScore(h, entry, latency, plat, stats, pool, now)}
+		i := count
+		for i > 0 && betterCandidate(candidate, ranked[i-1]) {
+			i--
 		}
-		if tier > bestTier {
-			candidateCount = 0
-		}
-		if tier >= 3 {
-			bestTier = tier
-			i := candidateCount
-			for i > 0 && candidates[i-1].score > score {
-				i--
+		if i < len(ranked) {
+			if count < len(ranked) {
+				count++
 			}
-			if i < len(candidates) {
-				if candidateCount < len(candidates) {
-					candidateCount++
-				}
-				copy(candidates[i+1:candidateCount], candidates[i:candidateCount-1])
-				candidates[i] = candidate{h, score}
-			}
-			return true
-		}
-		if tier > bestTier || (tier == bestTier && score < bestScore) {
-			bestTier, bestScore, ties, selected = tier, score, 1, h
-		} else if tier == bestTier && score == bestScore {
-			ties++
-			if rng.IntN(ties) == 0 {
-				selected = h
-			}
+			copy(ranked[i+1:count], ranked[i:count-1])
+			ranked[i] = candidate
 		}
 		return true
 	})
-	if candidateCount > 0 {
-		selected = candidates[rng.IntN(candidateCount)].hash
-	}
-	if selected == node.Zero {
+	if count == 0 {
 		return node.Zero, ErrNoAvailableNodes
 	}
-	return selected, nil
+	if ranked[0].tier < 3 {
+		return ranked[0].hash, nil
+	}
+	primary := 1
+	for primary < min(count, preferredCandidates) && ranked[primary].tier == ranked[0].tier {
+		primary++
+	}
+	if primary < count && ranked[primary].tier >= 1 && rng.IntN(candidateExplorationEvery) == 0 {
+		end := primary
+		for end < count && end < primary+preferredCandidates && ranked[end].tier == ranked[primary].tier {
+			end++
+		}
+		return weightedCandidate(ranked[primary:end], rng.Float64()), nil
+	}
+	return weightedCandidate(ranked[:primary], rng.Float64()), nil
+}
+
+func weightedCandidate(candidates []routeCandidate, ticket float64) node.Hash {
+	best := max(candidates[0].score, 1)
+	total := 0.0
+	for _, c := range candidates {
+		total += max(0.05, best/max(c.score, 1))
+	}
+	ticket *= total
+	for _, c := range candidates {
+		ticket -= max(0.05, best/max(c.score, 1))
+		if ticket < 0 {
+			return c.hash
+		}
+	}
+	return candidates[len(candidates)-1].hash
+}
+
+// Estimate the cost of a representative 128KiB response from passive windows.
+// Unknown throughput gets a neutral 1MiB/s prior, not zero-cost "infinite speed".
+// Confidence is ranked separately, so a fast probe never beats real responses.
+func connectionScore(h node.Hash, entry *node.NodeEntry, latency time.Duration, plat *platform.Platform, stats *IPLoadStats, pool PoolAccessor, now time.Time) float64 {
+	if latency <= 0 {
+		latency = 750 * time.Millisecond
+	}
+	speed, measured := entry.Traffic.DownloadSpeed(now, passiveSpeedWindow)
+	if !measured {
+		speed = 1024 * 1024
+	}
+	transfer := time.Duration(float64(128*1024) / max(speed, 1) * float64(time.Second))
+	cost := latency + min(transfer, 30*time.Second)
+	if plat.AllocationPolicy == platform.AllocationPolicyPreferIdleIP {
+		base := calculateScore(h, cost, plat, stats, pool)
+		seconds := cost.Seconds()
+		return base + seconds/(1+seconds)
+	}
+	return calculateScore(h, cost, plat, stats, pool)
 }
 
 func isRecent(t time.Time, now time.Time, window time.Duration) bool {

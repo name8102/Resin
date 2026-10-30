@@ -605,6 +605,7 @@ type NodeSummary struct {
 	LastLatencyProbeAttempt          string    `json:"last_latency_probe_attempt,omitempty"`
 	LastAuthorityLatencyProbeAttempt string    `json:"last_authority_latency_probe_attempt,omitempty"`
 	ReferenceLatencyMs               *float64  `json:"reference_latency_ms,omitempty"`
+	PassiveDownloadBytesPerSecond    float64   `json:"passive_download_bytes_per_second,omitempty"`
 	LastEgressUpdateAttempt          string    `json:"last_egress_update_attempt,omitempty"`
 	Tags                             []NodeTag `json:"tags"`
 }
@@ -632,6 +633,8 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 		FailureCount:     int(entry.FailureCount.Load()),
 		BlacklistStrikes: int(entry.BlacklistStrikes.Load()),
 	}
+
+	ns.PassiveDownloadBytesPerSecond, _ = entry.Traffic.DownloadSpeed(time.Now(), 30*time.Minute)
 
 	if s != nil && s.Pool != nil {
 		ns.Enabled = !s.Pool.IsNodeDisabled(h)

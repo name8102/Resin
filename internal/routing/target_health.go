@@ -19,6 +19,7 @@ const (
 	maxTargetFailureCooldown = 30 * time.Minute
 	targetFailureRetention   = 30 * time.Minute
 	maxTargetHealthEntries   = 8192
+	knownNodeWindow          = 30 * time.Minute
 )
 
 type targetHealthKey struct {
@@ -39,6 +40,7 @@ type targetHealth struct {
 
 type targetEvidence struct {
 	successes int
+	proven    int // real responses on this platform, across exact origins
 	failed    bool
 	cooling   bool
 }
@@ -134,7 +136,11 @@ func (r *Router) ReportTargetFailure(route RouteResult, target string) {
 	if !ok || plat.PassiveCircuitBreakerDisabled {
 		return
 	}
-	r.targetHealth.failure(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, time.Now(), r.p2cWindow())
+	now := time.Now()
+	r.targetHealth.failure(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, now, r.p2cWindow())
+	if contributesNodeEvidence(target) {
+		r.targetHealth.failure(targetHealthKey{route.PlatformID, route.NodeHash, ""}, now, knownNodeWindow)
+	}
 }
 
 // ReportTargetSuccess records an actual target response, not a successful dial
@@ -144,7 +150,11 @@ func (r *Router) ReportTargetSuccess(route RouteResult, target string) {
 	if _, ok := r.pool.GetPlatform(route.PlatformID); !ok {
 		return
 	}
-	r.targetHealth.success(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, route.selectedAt, time.Now(), r.p2cWindow())
+	now := time.Now()
+	r.targetHealth.success(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, route.selectedAt, now, r.p2cWindow())
+	if contributesNodeEvidence(target) {
+		r.targetHealth.success(targetHealthKey{route.PlatformID, route.NodeHash, ""}, route.selectedAt, now, knownNodeWindow)
+	}
 }
 
 type routeTarget struct {
@@ -158,6 +168,7 @@ func (r *Router) routeTarget(plat *platform.Platform, target string, excluded []
 	window := r.p2cWindow()
 	evidence := func(h node.Hash) targetEvidence {
 		result := r.targetHealth.evidence(targetHealthKey{plat.ID, h, address}, now, window)
+		result.proven = r.targetHealth.evidence(targetHealthKey{plat.ID, h, ""}, now, knownNodeWindow).successes
 		if plat.PassiveCircuitBreakerDisabled {
 			result.failed, result.cooling = false, false
 		}
@@ -197,4 +208,10 @@ func normalizeRouteTarget(target string) string {
 	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	return net.JoinHostPort(host, port)
+}
+
+// Syncthing peer reachability does not establish or revoke web/Git confidence.
+func contributesNodeEvidence(target string) bool {
+	_, port, _ := net.SplitHostPort(normalizeRouteTarget(target))
+	return port != "22000" && port != "22067"
 }

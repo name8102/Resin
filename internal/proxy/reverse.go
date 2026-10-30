@@ -65,6 +65,7 @@ func NewReverseProxy(cfg ReverseProxyConfig) *ReverseProxy {
 	if transportPool == nil {
 		transportPool = NewOutboundTransportPool(transportCfg)
 	}
+	transportPool.configurePassiveTraffic(cfg.Pool)
 	return &ReverseProxy{
 		token:           cfg.ProxyToken,
 		router:          cfg.Router,
@@ -85,6 +86,7 @@ func (p *ReverseProxy) outboundHTTPTransport(routed routedOutbound) *http.Transp
 		if p.transportPool == nil {
 			p.transportPool = NewOutboundTransportPool(p.transportConfig)
 		}
+		p.transportPool.configurePassiveTraffic(p.pool)
 	})
 	return p.transportPool.Get(routed.Route.NodeHash, routed.Outbound, p.metricsSink)
 }
@@ -358,6 +360,9 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeProxyError(rw, proxyErr)
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			if hasRoute {
+				p.router.ReportTargetSuccess(route, parsed.Host)
+			}
 			lifecycle.setHTTPStatus(resp.StatusCode)
 			lifecycle.addIngressBytes(headerWireLen(resp.Header))
 			if resp.StatusCode == http.StatusSwitchingProtocols {

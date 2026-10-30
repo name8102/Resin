@@ -4,9 +4,11 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Resinat/Resin/internal/node"
+	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
@@ -43,6 +45,10 @@ func normalizeOutboundTransportConfig(cfg OutboundTransportConfig) OutboundTrans
 type OutboundTransportPool struct {
 	config     OutboundTransportConfig
 	transports *xsync.Map[node.Hash, *http.Transport]
+	// WrapConnection is configured before the pool is used and wraps successful
+	// proxied dials only. Direct bypass transports never call it.
+	WrapConnection     func(node.Hash, net.Conn) net.Conn
+	passiveTrafficOnce sync.Once
 }
 
 func newOutboundTransportPool() *OutboundTransportPool {
@@ -61,6 +67,18 @@ func NewOutboundTransportPool(cfg OutboundTransportConfig) *OutboundTransportPoo
 	}
 }
 
+// configurePassiveTraffic binds a shared pool once, before request handling.
+func (p *OutboundTransportPool) configurePassiveTraffic(pool outbound.PoolAccessor) {
+	if pool == nil {
+		return
+	}
+	p.passiveTrafficOnce.Do(func() {
+		if p.WrapConnection == nil {
+			p.WrapConnection = passiveTrafficWrapper(pool)
+		}
+	})
+}
+
 // Get returns a reusable transport for the given node hash.
 func (p *OutboundTransportPool) Get(
 	hash node.Hash,
@@ -68,7 +86,7 @@ func (p *OutboundTransportPool) Get(
 	sink MetricsEventSink,
 ) *http.Transport {
 	transport, _ := p.transports.LoadOrCompute(hash, func() (*http.Transport, bool) {
-		return p.newReusableOutboundTransport(ob, sink), false
+		return p.newReusableOutboundTransport(hash, ob, sink), false
 	})
 	return transport
 }
@@ -93,7 +111,7 @@ func (p *OutboundTransportPool) CloseAll() {
 	p.transports.Clear()
 }
 
-func (p *OutboundTransportPool) newReusableOutboundTransport(ob adapter.Outbound, sink MetricsEventSink) *http.Transport {
+func (p *OutboundTransportPool) newReusableOutboundTransport(hash node.Hash, ob adapter.Outbound, sink MetricsEventSink) *http.Transport {
 	return &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			attemptCtx, cancel := context.WithTimeout(ctx, connectAttemptTimeout)
@@ -101,6 +119,9 @@ func (p *OutboundTransportPool) newReusableOutboundTransport(ob adapter.Outbound
 			conn, err := ob.DialContext(attemptCtx, network, M.ParseSocksaddr(addr))
 			if err != nil {
 				return nil, err
+			}
+			if p.WrapConnection != nil && samplesPassiveTraffic(addr) {
+				conn = p.WrapConnection(hash, conn)
 			}
 			if sink != nil {
 				sink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)

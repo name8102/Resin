@@ -59,6 +59,8 @@ type NodeEntry struct {
 	LastEgressUpdateAttempt          atomic.Int64
 	LatencyTable                     *LatencyTable // per-domain latency stats; nil if not initialized
 
+	Traffic TrafficStats // passive download throughput; memory-only
+
 	// Outbound instance for this node.
 	Outbound atomic.Pointer[adapter.Outbound]
 }

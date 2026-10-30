@@ -157,6 +157,10 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 			recordPassiveResult(deps.health, routed.Route, target, false)
 		}
 	}
+	if samplesPassiveTraffic(target) && deps.pool != nil {
+		entry, _ := deps.pool.GetEntry(routed.Route.NodeHash)
+		rawConn = newPassiveTrafficConn(rawConn, entry)
+	}
 	var upstreamBase net.Conn = rawConn
 	if deps.metricsSink != nil {
 		deps.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)

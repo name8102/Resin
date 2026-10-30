@@ -57,6 +57,7 @@ func NewForwardProxy(cfg ForwardProxyConfig) *ForwardProxy {
 	if transportPool == nil {
 		transportPool = NewOutboundTransportPool(transportCfg)
 	}
+	transportPool.configurePassiveTraffic(cfg.Pool)
 	return &ForwardProxy{
 		token:           cfg.ProxyToken,
 		router:          cfg.Router,
@@ -75,6 +76,7 @@ func (p *ForwardProxy) outboundHTTPTransport(routed routedOutbound) *http.Transp
 		if p.transportPool == nil {
 			p.transportPool = NewOutboundTransportPool(p.transportConfig)
 		}
+		p.transportPool.configurePassiveTraffic(p.pool)
 	})
 	return p.transportPool.Get(routed.Route.NodeHash, routed.Outbound, p.metricsSink)
 }
@@ -318,6 +320,9 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if hasRoute {
+		p.router.ReportTargetSuccess(route, target)
+	}
 
 	lifecycle.setHTTPStatus(resp.StatusCode)
 	lifecycle.setNetOK(true)
