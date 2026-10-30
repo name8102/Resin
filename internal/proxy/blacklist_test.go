@@ -81,3 +81,22 @@ func TestSocks5Inbound_InitialTLSFailureBlacklistsWholeNode(t *testing.T) {
 		})
 	}
 }
+
+func TestPassiveBlacklistIgnoresSyncthingPorts(t *testing.T) {
+	for _, target := range []string{"peer.example:22000", "[2001:db8::1]:22000", "peer.example:22067", "web.example:443", "git.example:22", "web.example:80"} {
+		t.Run(target, func(t *testing.T) {
+			env := newProxyE2EEnv(t)
+			route, err := env.router.RouteRequest("plat", "", target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recordPassiveResult(env.pool, route, target, false)
+			entry, _ := env.pool.GetEntry(route.NodeHash)
+			_, port, _ := net.SplitHostPort(target)
+			wantBlocked := port != "22000" && port != "22067"
+			if entry.IsCircuitOpen() != wantBlocked {
+				t.Fatalf("blacklisted = %v, want %v", entry.IsCircuitOpen(), wantBlocked)
+			}
+		})
+	}
+}

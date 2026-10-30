@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"net"
 	"time"
 
 	"github.com/Resinat/Resin/internal/node"
@@ -18,8 +19,10 @@ type passiveHealthRecorder interface {
 	RecordPassiveResult(platformID string, hash node.Hash, success bool)
 }
 
-func recordPassiveResult(health HealthRecorder, route routing.RouteResult, success bool) {
-	if health == nil {
+func recordPassiveResult(health HealthRecorder, route routing.RouteResult, target string, success bool) {
+	// Syncthing connectivity is not a signal for web/Git node health.
+	_, port, _ := net.SplitHostPort(target)
+	if health == nil || port == "22000" || port == "22067" {
 		return
 	}
 	if recorder, ok := health.(passiveHealthRecorder); ok {

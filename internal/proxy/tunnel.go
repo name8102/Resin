@@ -135,7 +135,7 @@ func prepareConnectTunnel(
 			// Record synchronously so the next request already sees the
 			// target restriction, independently of asynchronous global health.
 			deps.router.ReportTargetFailure(routed.Route, target)
-			recordPassiveResult(deps.health, routed.Route, false)
+			recordPassiveResult(deps.health, routed.Route, target, false)
 			last = tunnelPrepareResult{
 				route:         routed.Route,
 				proxyErr:      proxyErr,
@@ -154,7 +154,7 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 	recordResult := func(result tunnelRelayResult) {
 		if result.upstreamFailure {
 			deps.router.ReportTargetFailure(routed.Route, target)
-			recordPassiveResult(deps.health, routed.Route, false)
+			recordPassiveResult(deps.health, routed.Route, target, false)
 		}
 	}
 	var upstreamBase net.Conn = rawConn
@@ -164,7 +164,7 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 	}
 	upstreamConn := newTLSLatencyConn(upstreamBase, dialElapsed, func(latency time.Duration) {
 		deps.router.ReportTargetSuccess(routed.Route, target)
-		recordPassiveResult(deps.health, routed.Route, true)
+		recordPassiveResult(deps.health, routed.Route, target, true)
 		if deps.health != nil {
 			deps.health.RecordPassiveLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), &latency)
 		}

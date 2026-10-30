@@ -32,7 +32,6 @@ func TestEndToEnd_NodeEnterRoutableView(t *testing.T) {
 		SubLookup:              subMgr.Lookup,
 		GeoLookup:              geoLookup,
 		MaxLatencyTableEntries: 10,
-		MaxConsecutiveFailures: func() int { return 3 },
 		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
 	})
 

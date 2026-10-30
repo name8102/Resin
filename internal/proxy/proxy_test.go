@@ -125,14 +125,14 @@ func basicAuth(user, pass string) string {
 
 // --- Tests ---
 
-func TestRecordPassiveResultAsync_UsesPlatformAwareRecorder(t *testing.T) {
+func TestRecordPassiveResult_UsesPlatformAwareRecorder(t *testing.T) {
 	h := node.HashFromRawOptions([]byte(`{"type":"ss","n":"platform-aware"}`))
 	rec := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
 
 	recordPassiveResult(rec, routing.RouteResult{
 		PlatformID: "plat-1",
 		NodeHash:   h,
-	}, false)
+	}, "example.com:443", false)
 
 	select {
 	case <-rec.done:

@@ -353,7 +353,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			lifecycle.setNetOK(false)
 			lifecycle.setHTTPStatus(proxyErr.HTTPCode)
 			if hasRoute {
-				recordPassiveResult(p.health, route, false)
+				recordPassiveResult(p.health, route, parsed.Host, false)
 			}
 			writeProxyError(rw, proxyErr)
 		},
@@ -378,7 +378,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				lifecycle.setNetOK(true)
 				if hasRoute {
-					recordPassiveResult(p.health, route, true)
+					recordPassiveResult(p.health, route, parsed.Host, true)
 				}
 				return nil
 			}
@@ -404,7 +404,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// complexity is not worth it for the current phase.
 			lifecycle.setNetOK(true)
 			if hasRoute {
-				recordPassiveResult(p.health, route, true)
+				recordPassiveResult(p.health, route, parsed.Host, true)
 			}
 			return nil
 		},
