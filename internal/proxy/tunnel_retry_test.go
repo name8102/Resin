@@ -251,3 +251,64 @@ func TestPrepareConnectTunnel_AllAttemptsFitClientDialBudget(t *testing.T) {
 		t.Fatalf("retry budget exhausted client's deadline: calls=%d ctx=%v result=%+v elapsed=%v", calls.Load(), ctx.Err(), result, time.Since(started))
 	}
 }
+
+func TestPrepareConnectTunnel_HedgesSlowAnonymousNode(t *testing.T) {
+	env := newProxyE2EEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	setProxyE2EOutboundDialFunc(t, env, func(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return nil, ctx.Err()
+	})
+	resultCh := make(chan tunnelPrepareResult, 1)
+	go func() {
+		resultCh <- prepareConnectTunnel(ctx, tunnelDeps{router: env.router, pool: env.pool}, "plat", "", "api.github.com:443")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first dial did not start")
+	}
+	good := addRetryNode(t, env, "good", "203.0.113.11", func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		a, b := net.Pipe()
+		t.Cleanup(func() { a.Close(); b.Close() })
+		return a, nil
+	})
+	select {
+	case result := <-resultCh:
+		if result.session == nil || result.route.NodeHash != good {
+			t.Fatalf("hedged route: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("slow first node prevented fast backup from dialing")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("losing dial was not canceled")
+	}
+}
+
+func TestPrepareConnectTunnel_AnonymousHandshakeKeepsFullWindow(t *testing.T) {
+	env := newProxyE2EEnv(t)
+	setProxyE2EOutboundDialFunc(t, env, func(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+		timer := time.NewTimer(1800 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		a, b := net.Pipe()
+		t.Cleanup(func() { a.Close(); b.Close() })
+		return a, nil
+	})
+	result := prepareConnectTunnel(context.Background(), tunnelDeps{router: env.router, pool: env.pool}, "plat", "", "api.github.com:443")
+	if result.session == nil {
+		t.Fatalf("healthy slower handshake was rejected: %+v", result)
+	}
+}

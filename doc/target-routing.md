@@ -8,10 +8,12 @@ Global probe health therefore remains separate from passive target failures.
   an older successful tunnel does not clear the cooldown.
 - Cooldowns live only in memory, are capped at 8,192 entries, and expire lazily.
   They are ignored when a platform disables passive circuit breaking.
-- CONNECT and SOCKS5 try at most three distinct nodes before acknowledging the
-  tunnel. Each dial has a 1.4-second timeout, keeping all three attempts below
-  Mihomo's five-second SOCKS dial budget; a caller's earlier deadline wins.
-  Sticky routes still prefer another node with the same egress IP.
+- Anonymous CONNECT/SOCKS5 connections hedge at most three distinct nodes,
+  starting backups 200 ms apart within a shared 4.3-second dial budget. The
+  first successful connection wins; canceled or late candidates are closed.
+- Account-bound tunnels retain sequential failover and same-egress-IP priority,
+  with 1.4 seconds per attempt. Both paths fit Mihomo's five-second SOCKS dial
+  budget, and a caller's earlier deadline wins.
 - Plain HTTP can also fail over before obtaining an upstream connection, but
   body-bearing requests are never replayed. Once a connection is acquired, no
   cross-node replay occurs, even for requests without a body.

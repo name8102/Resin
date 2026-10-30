@@ -84,6 +84,10 @@ func prepareConnectTunnel(
 		return prepareDirectConnectTunnel(ctx, deps, target)
 	}
 
+	if account == "" {
+		return prepareHedgedConnectTunnel(ctx, deps, platformName, target)
+	}
+
 	var excluded []node.Hash
 	var last tunnelPrepareResult
 	for attempt := 0; attempt < maxConnectAttempts; attempt++ {
@@ -136,25 +140,24 @@ func prepareConnectTunnel(
 			continue
 		}
 
-		recordResult := func(ok bool) {
-			recordPassiveResultAsync(deps.health, routed.Route, ok)
-		}
-		var upstreamBase net.Conn = rawConn
-		if deps.metricsSink != nil {
-			deps.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)
-			upstreamBase = newCountingConn(rawConn, deps.metricsSink)
-		}
-		upstreamConn := newTLSLatencyConn(upstreamBase, func(latency time.Duration) {
-			if deps.health != nil {
-				deps.health.RecordLatency(nodeHashRaw, domain, &latency)
-			}
-		})
-		return tunnelPrepareResult{
-			route:   routed.Route,
-			session: &preparedTunnel{upstreamConn: upstreamConn, recordResult: recordResult},
-		}
+		return finishConnectTunnel(deps, routed, rawConn, target)
 	}
 	return last
+}
+
+func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Conn, target string) tunnelPrepareResult {
+	recordResult := func(ok bool) { recordPassiveResultAsync(deps.health, routed.Route, ok) }
+	var upstreamBase net.Conn = rawConn
+	if deps.metricsSink != nil {
+		deps.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)
+		upstreamBase = newCountingConn(rawConn, deps.metricsSink)
+	}
+	upstreamConn := newTLSLatencyConn(upstreamBase, func(latency time.Duration) {
+		if deps.health != nil {
+			deps.health.RecordLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), &latency)
+		}
+	})
+	return tunnelPrepareResult{route: routed.Route, session: &preparedTunnel{upstreamConn: upstreamConn, recordResult: recordResult}}
 }
 
 func prepareDirectConnectTunnel(ctx context.Context, deps tunnelDeps, target string) tunnelPrepareResult {
