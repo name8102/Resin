@@ -44,11 +44,12 @@ type NodeEntry struct {
 	LastError       string
 
 	// Atomic dynamic fields for concurrent hot-path reads.
-	FailureCount     atomic.Int32
-	CircuitOpenSince atomic.Int64               // unix-nano; 0 = not open
-	egressIP         atomic.Pointer[netip.Addr] // nil before first store
-	egressRegion     atomic.Pointer[string]     // lowercase country code from probe trace; nil when unknown
-	LastEgressUpdate atomic.Int64               // unix-nano of last successful egress-IP sample
+	FailureCount        atomic.Int32
+	CircuitOpenSince    atomic.Int64               // unix-nano; 0 = not open
+	egressIP            atomic.Pointer[netip.Addr] // nil before first store
+	egressRegion        atomic.Pointer[string]     // lowercase country code from probe trace; nil when unknown
+	LastEgressUpdate    atomic.Int64               // unix-nano of last successful egress-IP sample
+	LastPassiveActivity atomic.Int64               // unix-nano of last passive traffic attempt; memory-only
 	// Probe-attempt timestamps (unix-nano). These are updated regardless of
 	// probe success/failure, and are used by probe schedulers.
 	LastLatencyProbeAttempt          atomic.Int64

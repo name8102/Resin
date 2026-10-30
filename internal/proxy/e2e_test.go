@@ -1093,17 +1093,10 @@ func TestForwardProxy_CONNECTZeroTrafficMarkedFailed(t *testing.T) {
 		t.Fatal("expected CONNECT log event")
 	}
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if health.resultCalls.Load() > 0 {
-			if health.lastSuccess.Load() != 0 {
-				t.Fatalf("RecordResult lastSuccess: got %d, want 0", health.lastSuccess.Load())
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// A client that never sends a request provides no node-health evidence.
+	if got := health.resultCalls.Load(); got != 0 {
+		t.Fatalf("idle/server-push tunnel changed node health: %d calls", got)
 	}
-	t.Fatal("expected RecordResult call for CONNECT zero-traffic failure")
 }
 
 func TestForwardProxy_CONNECTHalfTrafficNotMarkedZeroTraffic(t *testing.T) {
@@ -1202,15 +1195,8 @@ func TestForwardProxy_CONNECTHalfTrafficNotMarkedZeroTraffic(t *testing.T) {
 		t.Fatal("expected CONNECT log event")
 	}
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if health.resultCalls.Load() > 0 {
-			if health.lastSuccess.Load() != 0 {
-				t.Fatalf("RecordResult lastSuccess: got %d, want 0", health.lastSuccess.Load())
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// A client that never sends a request provides no node-health evidence.
+	if got := health.resultCalls.Load(); got != 0 {
+		t.Fatalf("idle/server-push tunnel changed node health: %d calls", got)
 	}
-	t.Fatal("expected RecordResult call for CONNECT half-traffic failure")
 }

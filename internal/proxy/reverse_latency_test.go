@@ -15,7 +15,7 @@ type latencySampleRecorder struct {
 
 func (r *latencySampleRecorder) RecordResult(hash node.Hash, success bool) {}
 
-func (r *latencySampleRecorder) RecordLatency(hash node.Hash, rawTarget string, latency *time.Duration) {
+func (r *latencySampleRecorder) RecordPassiveLatency(hash node.Hash, rawTarget string, latency *time.Duration) {
 	if latency == nil {
 		return
 	}

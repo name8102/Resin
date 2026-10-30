@@ -19,7 +19,8 @@ var randomRouteRNGPool = sync.Pool{
 }
 
 // randomRoute chooses among nodes with the strongest recent reachability
-// evidence: target observations first, authority probes second, unknown last.
+// evidence: exact-origin responses first, domain latency and authority probes
+// next, unknown nodes before origins with retained failures.
 // Anonymous requests have no lease load, so random P2C otherwise keeps sending
 // traffic to untested nodes even while known-working target routes exist.
 func randomRoute(
@@ -30,6 +31,7 @@ func randomRoute(
 	authorities []string,
 	p2cWindow time.Duration,
 	allows func(node.Hash) bool,
+	evidence func(node.Hash) targetEvidence,
 ) (node.Hash, error) {
 	view := plat.View()
 	size := view.Size()
@@ -39,10 +41,18 @@ func randomRoute(
 	rng := randomRouteRNGPool.Get().(*rand.Rand)
 	defer randomRouteRNGPool.Put(rng)
 	now := time.Now()
-	bestTier := -1
+	bestTier := -2
 	bestScore := 0.0
 	ties := 0
 	selected := node.Zero
+	// Positive exact-origin evidence is shared across the three best policy
+	// scores, rather than pinning every anonymous connection to one old minimum.
+	type candidate struct {
+		hash  node.Hash
+		score float64
+	}
+	var candidates [3]candidate
+	candidateCount := 0
 	view.Range(func(h node.Hash) bool {
 		if allows != nil && !allows(h) {
 			return true
@@ -63,7 +73,37 @@ func randomRoute(
 		} else if latency, measured = averageRecentAuthorityLatency(entry, authorities, now, p2cWindow); measured {
 			tier = 1
 		}
+		if evidence != nil {
+			health := evidence(h)
+			if health.failed {
+				tier = -1
+			}
+			if health.successes > 0 {
+				tier = 2 + health.successes
+			}
+		}
 		score := calculateScore(h, latency, plat, stats, pool)
+		if tier < bestTier {
+			return true
+		}
+		if tier > bestTier {
+			candidateCount = 0
+		}
+		if tier >= 3 {
+			bestTier = tier
+			i := candidateCount
+			for i > 0 && candidates[i-1].score > score {
+				i--
+			}
+			if i < len(candidates) {
+				if candidateCount < len(candidates) {
+					candidateCount++
+				}
+				copy(candidates[i+1:candidateCount], candidates[i:candidateCount-1])
+				candidates[i] = candidate{h, score}
+			}
+			return true
+		}
 		if tier > bestTier || (tier == bestTier && score < bestScore) {
 			bestTier, bestScore, ties, selected = tier, score, 1, h
 		} else if tier == bestTier && score == bestScore {
@@ -74,6 +114,9 @@ func randomRoute(
 		}
 		return true
 	})
+	if candidateCount > 0 {
+		selected = candidates[rng.IntN(candidateCount)].hash
+	}
 	if selected == node.Zero {
 		return node.Zero, ErrNoAvailableNodes
 	}

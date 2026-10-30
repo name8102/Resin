@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/model"
-	"github.com/Resinat/Resin/internal/netutil"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/platform"
 	"github.com/puzpuzpuz/xsync/v4"
@@ -28,7 +27,7 @@ type PoolAccessor interface {
 
 // Router handles route selection and lease management.
 type Router struct {
-	targetFailures  targetFailureCache
+	targetHealth    targetHealthCache
 	pool            PoolAccessor
 	states          *xsync.Map[string, *PlatformRoutingState]
 	authorities     func() []string
@@ -60,6 +59,7 @@ func NewRouter(cfg RouterConfig) *Router {
 }
 
 type RouteResult struct {
+	selectedAt   time.Time // Pick began at this instant; protects against late successes.
 	PlatformID   string
 	PlatformName string
 	NodeHash     node.Hash
@@ -80,15 +80,13 @@ const (
 
 // RouteRequest selects a route, skipping nodes already attempted by this request.
 func (r *Router) RouteRequest(platName, account, target string, excluded ...node.Hash) (RouteResult, error) {
+	selectedAt := time.Now()
 	plat, err := r.resolvePlatform(platName)
 	if err != nil {
 		return RouteResult{}, err
 	}
 
-	destination := routeTarget{
-		domain: netutil.ExtractDomain(target),
-		allows: r.targetFilter(plat, target, excluded),
-	}
+	destination := r.routeTarget(plat, target, excluded, selectedAt)
 	state := r.ensurePlatformState(plat.ID)
 	var result RouteResult
 	if account == "" {
@@ -100,6 +98,7 @@ func (r *Router) RouteRequest(platName, account, target string, excluded ...node
 		return RouteResult{}, err
 	}
 	result = withPlatformContext(plat, result)
+	result.selectedAt = selectedAt
 	if r.nodeTagResolver != nil {
 		result.NodeTag = r.nodeTagResolver(result.NodeHash)
 	}
@@ -402,7 +401,7 @@ func (r *Router) selectLiveRandomRoute(
 ) (node.Hash, *node.NodeEntry, error) {
 	var lastMissing node.Hash
 	for i := 0; i < livePickAttempts; i++ {
-		h, err := randomRoute(plat, stats, r.pool, target.domain, r.authorities(), r.p2cWindow(), target.allows)
+		h, err := randomRoute(plat, stats, r.pool, target.domain, r.authorities(), r.p2cWindow(), target.allows, target.evidence)
 		if err != nil {
 			return node.Zero, nil, err
 		}

@@ -391,6 +391,54 @@ func TestRecordLatency_AttemptOnly_UpdatesAttemptTimestamps(t *testing.T) {
 	}
 }
 
+func TestRecordPassiveLatency_PreservesProbeAttempts(t *testing.T) {
+	for _, sample := range []bool{false, true} {
+		t.Run(map[bool]string{false: "failed", true: "success"}[sample], func(t *testing.T) {
+			var dynamicChanges, latencyChanges atomic.Int32
+			pool := NewGlobalNodePool(PoolConfig{
+				MaxLatencyTableEntries: 16,
+				MaxConsecutiveFailures: func() int { return 3 },
+				LatencyAuthorities:     func() []string { return []string{"example.com"} },
+				OnNodeDynamicChanged:   func(node.Hash) { dynamicChanges.Add(1) },
+				OnNodeLatencyChanged:   func(node.Hash, string) { latencyChanges.Add(1) },
+			})
+			raw := []byte(`{"type":"passive-latency"}`)
+			hash := node.HashFromRawOptions(raw)
+			pool.AddNodeFromSub(hash, raw, "s1")
+			entry, _ := pool.GetEntry(hash)
+			pool.RecordLatency(hash, "example.com", nil)
+			if entry.LastPassiveActivity.Load() != 0 {
+				t.Fatal("active probes must not mark a cold node as hot")
+			}
+			lastAny := entry.LastLatencyProbeAttempt.Load()
+			lastAuthority := entry.LastAuthorityLatencyProbeAttempt.Load()
+			before := time.Now().UnixNano()
+			var latency *time.Duration
+			if sample {
+				value := 42 * time.Millisecond
+				latency = &value
+			}
+			pool.RecordPassiveLatency(hash, "www.example.com:443", latency)
+			if got := entry.LastPassiveActivity.Load(); got < before {
+				t.Fatalf("passive activity = %d, want >= %d", got, before)
+			}
+			if entry.LastLatencyProbeAttempt.Load() != lastAny || entry.LastAuthorityLatencyProbeAttempt.Load() != lastAuthority {
+				t.Fatal("passive traffic must not change active probe-attempt timestamps")
+			}
+			if got := dynamicChanges.Load(); got != 1 {
+				t.Fatalf("passive activity must not emit persistent dynamic changes; got %d callbacks", got)
+			}
+			stats, ok := entry.LatencyTable.GetDomainStats("example.com")
+			if ok != sample {
+				t.Fatalf("latency sample present = %v, want %v", ok, sample)
+			}
+			if sample && (stats.Ewma != *latency || latencyChanges.Load() != 1) {
+				t.Fatalf("passive sample writeback: stats=%+v callbacks=%d", stats, latencyChanges.Load())
+			}
+		})
+	}
+}
+
 // --- UpdateNodeEgressIP tests ---
 
 func TestUpdateNodeEgressIP_Change(t *testing.T) {

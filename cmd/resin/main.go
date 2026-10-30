@@ -279,6 +279,9 @@ func newTopologyRuntime(
 		MaxAuthorityLatencyTestInterval: func() time.Duration {
 			return time.Duration(runtimeConfigSnapshot(runtimeCfg).MaxAuthorityLatencyTestInterval)
 		},
+		LatencyWindow: func() time.Duration {
+			return time.Duration(runtimeConfigSnapshot(runtimeCfg).P2CLatencyWindow)
+		},
 		LatencyTestURL: func() string {
 			return runtimeConfigSnapshot(runtimeCfg).LatencyTestURL
 		},

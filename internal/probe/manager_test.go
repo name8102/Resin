@@ -937,6 +937,81 @@ func TestIsLatencyProbeDue_UsesAttemptTimestamps(t *testing.T) {
 	}
 }
 
+func TestIsLatencyProbeDue_HotAndColdNodes(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name                                      string
+		window, activityAge, anyAge, authorityAge time.Duration
+		hasActivity, authorities, want            bool
+	}{
+		{name: "hot before deadline", window: 10 * time.Minute, hasActivity: true, activityAge: time.Minute, anyAge: 5*time.Minute - time.Second},
+		{name: "hot due", window: 10 * time.Minute, hasActivity: true, activityAge: time.Minute, anyAge: 5 * time.Minute, want: true},
+		{name: "hot authority due", window: 10 * time.Minute, hasActivity: true, activityAge: time.Minute, anyAge: time.Minute, authorityAge: 5 * time.Minute, authorities: true, want: true},
+		{name: "cold unchanged", window: 10 * time.Minute, anyAge: 6 * time.Minute},
+		{name: "expired activity", window: 10 * time.Minute, hasActivity: true, activityAge: 10*time.Minute + time.Second, anyAge: 6 * time.Minute},
+		{name: "cold hourly deadline", window: 10 * time.Minute, anyAge: time.Hour - 15*time.Second, want: true},
+		{name: "cold authority deadline", window: 10 * time.Minute, anyAge: time.Minute, authorityAge: 3*time.Hour - 15*time.Second, authorities: true, want: true},
+		{name: "zero window", hasActivity: true, anyAge: 6 * time.Minute},
+		{name: "negative window", window: -time.Second, hasActivity: true, anyAge: 6 * time.Minute},
+		{name: "tiny window throttled", window: time.Second, hasActivity: true, anyAge: time.Minute - time.Second},
+		{name: "tiny window deadline", window: time.Second, hasActivity: true, anyAge: time.Minute, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := NewProbeManager(ProbeConfig{LatencyWindow: func() time.Duration { return tc.window }})
+			entry := node.NewNodeEntry(node.Hash{}, nil, now, 0)
+			entry.LastLatencyProbeAttempt.Store(now.Add(-tc.anyAge).UnixNano())
+			entry.LastAuthorityLatencyProbeAttempt.Store(now.Add(-tc.authorityAge).UnixNano())
+			if tc.hasActivity {
+				entry.LastPassiveActivity.Store(now.Add(-tc.activityAge).UnixNano())
+			}
+			var authorities []string
+			if tc.authorities {
+				authorities = []string{"example.com"}
+			}
+			if got := mgr.isLatencyProbeDue(entry, now, time.Hour, 3*time.Hour, authorities, 15*time.Second); got != tc.want {
+				t.Fatalf("due = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsLatencyProbeDue_PassiveFailuresDoNotPostponeActiveProbe(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+		LatencyAuthorities:     func() []string { return []string{"example.com"} },
+	})
+	raw := []byte(`{"type":"passive-failures"}`)
+	hash := node.HashFromRawOptions(raw)
+	pool.AddNodeFromSub(hash, raw, "s1")
+	entry, _ := pool.GetEntry(hash)
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:          pool,
+		LatencyWindow: func() time.Duration { return 10 * time.Minute },
+		Fetcher:       func(node.Hash, string) ([]byte, time.Duration, error) { return nil, 0, errors.New("timeout") },
+	})
+	entry.LastLatencyProbeAttempt.Store(time.Now().Add(-6 * time.Minute).UnixNano())
+	entry.LastAuthorityLatencyProbeAttempt.Store(time.Now().Add(-6 * time.Minute).UnixNano())
+	for range 3 {
+		pool.RecordPassiveLatency(hash, "example.com", nil)
+	}
+	if !mgr.isLatencyProbeDue(entry, time.Now(), time.Hour, 3*time.Hour, []string{"example.com"}, 15*time.Second) {
+		t.Fatal("repeated passive failures must not postpone an overdue active probe")
+	}
+	if err := mgr.performLatencyProbe(hash, "https://example.com"); err == nil {
+		t.Fatal("expected failed active probe")
+	}
+	if entry.HasLatency() {
+		t.Fatal("failed probes must not write positive latency samples")
+	}
+	for range 3 {
+		pool.RecordPassiveLatency(hash, "example.com", nil)
+	}
+	if mgr.isLatencyProbeDue(entry, time.Now(), time.Hour, 3*time.Hour, []string{"example.com"}, 15*time.Second) {
+		t.Fatal("a failed active probe must still throttle subsequent attempts")
+	}
+}
+
 // TestParseCloudflareTrace_Success verifies IP extraction from trace body.
 func TestParseCloudflareTrace_Success(t *testing.T) {
 	body := []byte("fl=abc\nip=1.2.3.4\nloc=US\nts=12345")

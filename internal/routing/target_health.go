@@ -9,93 +9,164 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Resinat/Resin/internal/netutil"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/platform"
 )
 
 const (
-	targetFailureCooldown = 5 * time.Minute
-	maxTargetFailures     = 8192
+	targetFailureCooldown    = 5 * time.Minute
+	maxTargetFailureCooldown = 30 * time.Minute
+	targetFailureRetention   = 30 * time.Minute
+	maxTargetHealthEntries   = 8192
 )
 
-type targetFailureKey struct {
+type targetHealthKey struct {
 	platformID string
 	node       node.Hash
 	target     string
 }
 
-type targetFailure struct {
-	key   targetFailureKey
-	until time.Time
+type targetHealth struct {
+	key         targetHealthKey
+	lastFailure time.Time
+	until       time.Time
+	failures    int
+	// The latest two responses suffice to distinguish recent stable success.
+	success         time.Time
+	previousSuccess time.Time
 }
 
-// Target failures are transient and bounded. Keeping them separate from global
-// node health prevents a successful Google probe from reopening a GitHub route.
-type targetFailureCache struct {
+type targetEvidence struct {
+	successes int
+	failed    bool
+	cooling   bool
+}
+
+// Exact-origin health is bounded and independent of global probe health.
+// Authority probes and sibling-domain latency cannot reopen a failed origin.
+type targetHealthCache struct {
 	mu      sync.Mutex
-	entries map[targetFailureKey]*list.Element
+	entries map[targetHealthKey]*list.Element
 	order   list.List
 }
 
-func (c *targetFailureCache) add(key targetFailureKey, now time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.entries == nil {
-		c.entries = make(map[targetFailureKey]*list.Element)
+func (c *targetHealthCache) get(key targetHealthKey, now time.Time, window time.Duration) targetHealth {
+	e := c.entries[key]
+	if e == nil {
+		return targetHealth{key: key}
 	}
-	if e := c.entries[key]; e != nil {
-		e.Value = targetFailure{key, now.Add(targetFailureCooldown)}
+	health := e.Value.(targetHealth)
+	failureExpired := health.lastFailure.IsZero() || !now.Before(health.until.Add(targetFailureRetention))
+	successExpired := health.success.IsZero() || !isRecent(health.success, now, window)
+	if failureExpired && successExpired {
+		delete(c.entries, key)
+		c.order.Remove(e)
+		return targetHealth{key: key}
+	}
+	return health
+}
+
+func (c *targetHealthCache) put(health targetHealth) {
+	if c.entries == nil {
+		c.entries = make(map[targetHealthKey]*list.Element)
+	}
+	if e := c.entries[health.key]; e != nil {
+		e.Value = health
 		c.order.MoveToBack(e)
 		return
 	}
-	if len(c.entries) >= maxTargetFailures {
+	if len(c.entries) >= maxTargetHealthEntries {
 		oldest := c.order.Front()
-		delete(c.entries, oldest.Value.(targetFailure).key)
+		delete(c.entries, oldest.Value.(targetHealth).key)
 		c.order.Remove(oldest)
 	}
-	c.entries[key] = c.order.PushBack(targetFailure{key, now.Add(targetFailureCooldown)})
+	c.entries[health.key] = c.order.PushBack(health)
 }
 
-func (c *targetFailureCache) contains(key targetFailureKey, now time.Time) bool {
+func (c *targetHealthCache) failure(key targetHealthKey, now time.Time, window time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e := c.entries[key]
-	if e == nil {
-		return false
+	health := c.get(key, now, window)
+	health.failures = min(health.failures+1, 4)
+	cooldown := targetFailureCooldown
+	for i := 1; i < health.failures && cooldown < maxTargetFailureCooldown; i++ {
+		cooldown = min(cooldown*2, maxTargetFailureCooldown)
 	}
-	if !now.Before(e.Value.(targetFailure).until) {
-		delete(c.entries, key)
-		c.order.Remove(e)
-		return false
-	}
-	return true
+	health.lastFailure = now
+	health.until = now.Add(cooldown)
+	health.success, health.previousSuccess = time.Time{}, time.Time{}
+	c.put(health)
 }
 
-// ReportTargetFailure temporarily excludes this node for this exact host:port.
-// Only actual upstream failures belong here, not client cancellation or local
-// response/hijack errors. Successes never clear a newer failure; expiry permits
-// recovery without being overwritten by probes or older, long-lived tunnels.
+func (c *targetHealthCache) success(key targetHealthKey, selectedAt, now time.Time, window time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	health := c.get(key, now, window)
+	// A response from a connection picked before the latest failure cannot
+	// rehabilitate this origin, even if that connection outlives the cooldown.
+	if selectedAt.IsZero() || !selectedAt.After(health.lastFailure) || now.Before(health.until) {
+		return
+	}
+	health.previousSuccess, health.success = health.success, now
+	health.failures = 0
+	c.put(health)
+}
+
+func (c *targetHealthCache) evidence(key targetHealthKey, now time.Time, window time.Duration) targetEvidence {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	health := c.get(key, now, window)
+	evidence := targetEvidence{failed: !health.lastFailure.IsZero() && health.success.IsZero(), cooling: now.Before(health.until)}
+	if !health.success.IsZero() && isRecent(health.success, now, window) {
+		evidence.successes = 1
+		if !health.previousSuccess.IsZero() && isRecent(health.previousSuccess, now, window) {
+			evidence.successes = 2
+		}
+	}
+	return evidence
+}
+
+// ReportTargetFailure excludes an exact origin with exponential cooldown.
+// Only upstream failures belong here, not cancellation or local response errors.
 func (r *Router) ReportTargetFailure(route RouteResult, target string) {
 	plat, ok := r.pool.GetPlatform(route.PlatformID)
 	if !ok || plat.PassiveCircuitBreakerDisabled {
 		return
 	}
-	r.targetFailures.add(targetFailureKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, time.Now())
+	r.targetHealth.failure(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, time.Now(), r.p2cWindow())
+}
+
+// ReportTargetSuccess records an actual target response, not a successful dial
+// or an authority probe. It must be called only once for a connection's first
+// valid response; it does not imply full TLS handshake validation.
+func (r *Router) ReportTargetSuccess(route RouteResult, target string) {
+	if _, ok := r.pool.GetPlatform(route.PlatformID); !ok {
+		return
+	}
+	r.targetHealth.success(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, route.selectedAt, time.Now(), r.p2cWindow())
 }
 
 type routeTarget struct {
-	domain string
-	allows func(node.Hash) bool
+	domain   string
+	allows   func(node.Hash) bool
+	evidence func(node.Hash) targetEvidence
 }
 
-func (r *Router) targetFilter(plat *platform.Platform, target string, excluded []node.Hash) func(node.Hash) bool {
+func (r *Router) routeTarget(plat *platform.Platform, target string, excluded []node.Hash, now time.Time) routeTarget {
 	address := normalizeRouteTarget(target)
-	now := time.Now()
-	return func(h node.Hash) bool {
-		if slices.Contains(excluded, h) {
-			return false
+	window := r.p2cWindow()
+	evidence := func(h node.Hash) targetEvidence {
+		result := r.targetHealth.evidence(targetHealthKey{plat.ID, h, address}, now, window)
+		if plat.PassiveCircuitBreakerDisabled {
+			result.failed, result.cooling = false, false
 		}
-		return plat.PassiveCircuitBreakerDisabled || !r.targetFailures.contains(targetFailureKey{plat.ID, h, address}, now)
+		return result
+	}
+	return routeTarget{
+		domain:   netutil.ExtractDomain(target),
+		allows:   func(h node.Hash) bool { return !slices.Contains(excluded, h) && !evidence(h).cooling },
+		evidence: evidence,
 	}
 }
 

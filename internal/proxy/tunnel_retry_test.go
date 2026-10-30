@@ -168,8 +168,10 @@ func TestPrepareConnectTunnel_CallerCancellationDoesNotPenalizeNode(t *testing.T
 
 func TestPrepareConnectTunnel_OlderSuccessDoesNotClearNewFailure(t *testing.T) {
 	env := newProxyE2EEnv(t)
+	var peer net.Conn
 	setProxyE2EOutboundDialFunc(t, env, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
 		a, b := net.Pipe()
+		peer = b
 		t.Cleanup(func() { a.Close(); b.Close() })
 		return a, nil
 	})
@@ -178,7 +180,15 @@ func TestPrepareConnectTunnel_OlderSuccessDoesNotClearNewFailure(t *testing.T) {
 		t.Fatalf("prepare: %+v", result)
 	}
 	env.router.ReportTargetFailure(result.route, "api.github.com:443")
-	result.session.recordResult(true)
+	// Deliver this old connection's first qualifying response after a newer
+	// failure, exercising the production observer callback rather than teardown.
+	go func() { _, _ = io.ReadFull(peer, make([]byte, 2)); _, _ = peer.Write([]byte("ok")) }()
+	if _, err := result.session.upstreamConn.Write([]byte("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(result.session.upstreamConn, make([]byte, 2)); err != nil {
+		t.Fatal(err)
+	}
 	env.pool.RecordResult(result.route.NodeHash, true)
 	if _, err := env.router.RouteRequest("plat", "", "api.github.com:443"); !errors.Is(err, routing.ErrNoAvailableNodes) {
 		t.Fatalf("old success cleared new failure: %v", err)

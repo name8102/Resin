@@ -474,17 +474,11 @@ func TestSocks5Inbound_CONNECTOneWayTrafficStillLogsSuccess(t *testing.T) {
 		t.Fatal("expected SOCKS5 request log event")
 	}
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if health.resultCalls.Load() > 0 {
-			if health.lastSuccess.Load() != 1 {
-				t.Fatalf("RecordResult lastSuccess: got %d, want 1", health.lastSuccess.Load())
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Server-first, one-way protocols are supported, but do not prove that an
+	// outbound request/response exchange succeeded and must not reset failures.
+	if got := health.resultCalls.Load(); got != 0 {
+		t.Fatalf("server-push-only tunnel changed node health: %d calls", got)
 	}
-	t.Fatal("expected RecordResult call for one-way SOCKS5 CONNECT success")
 }
 
 func TestSocks5Inbound_CONNECTResponseWriteFailureDoesNotPenalizeNode(t *testing.T) {

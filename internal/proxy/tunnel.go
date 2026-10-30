@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Resinat/Resin/internal/netutil"
@@ -26,7 +28,7 @@ type tunnelDeps struct {
 
 type preparedTunnel struct {
 	upstreamConn net.Conn
-	recordResult func(bool)
+	recordResult func(tunnelRelayResult)
 }
 
 type tunnelPrepareResult struct {
@@ -39,12 +41,13 @@ type tunnelPrepareResult struct {
 }
 
 type tunnelRelayResult struct {
-	ingressBytes  int64
-	egressBytes   int64
-	netOK         bool
-	proxyErr      *ProxyError
-	upstreamStage string
-	upstreamErr   error
+	upstreamFailure bool // attributable initial upstream failure, not client cancellation
+	ingressBytes    int64
+	egressBytes     int64
+	netOK           bool
+	proxyErr        *ProxyError
+	upstreamStage   string
+	upstreamErr     error
 }
 
 type tunnelPumpOptions struct {
@@ -105,7 +108,7 @@ func prepareConnectTunnel(
 		domain := netutil.ExtractDomain(target)
 		nodeHashRaw := routed.Route.NodeHash
 		if deps.health != nil {
-			go deps.health.RecordLatency(nodeHashRaw, domain, nil)
+			go deps.health.RecordPassiveLatency(nodeHashRaw, domain, nil)
 		}
 
 		// Bound each attempt even when the caller (notably SOCKS5) has no
@@ -148,15 +151,22 @@ func prepareConnectTunnel(
 }
 
 func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Conn, target string, dialElapsed time.Duration) tunnelPrepareResult {
-	recordResult := func(ok bool) { recordPassiveResultAsync(deps.health, routed.Route, ok) }
+	recordResult := func(result tunnelRelayResult) {
+		if result.upstreamFailure {
+			deps.router.ReportTargetFailure(routed.Route, target)
+			recordPassiveResultAsync(deps.health, routed.Route, false)
+		}
+	}
 	var upstreamBase net.Conn = rawConn
 	if deps.metricsSink != nil {
 		deps.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)
 		upstreamBase = newCountingConn(rawConn, deps.metricsSink)
 	}
 	upstreamConn := newTLSLatencyConn(upstreamBase, dialElapsed, func(latency time.Duration) {
+		deps.router.ReportTargetSuccess(routed.Route, target)
+		recordPassiveResultAsync(deps.health, routed.Route, true)
 		if deps.health != nil {
-			deps.health.RecordLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), &latency)
+			deps.health.RecordPassiveLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), &latency)
 		}
 	})
 	return tunnelPrepareResult{route: routed.Route, session: &preparedTunnel{upstreamConn: upstreamConn, recordResult: recordResult}}
@@ -185,7 +195,7 @@ func prepareDirectConnectTunnel(ctx context.Context, deps tunnelDeps, target str
 	return tunnelPrepareResult{
 		session: &preparedTunnel{
 			upstreamConn: upstreamConn,
-			recordResult: func(bool) {},
+			recordResult: func(tunnelRelayResult) {},
 		},
 	}
 }
@@ -227,6 +237,7 @@ func pumpPreparedTunnelReader(
 		n   int64
 		err error
 	}
+	var firstEnded atomic.Uint32 // 1: client->upstream, 2: upstream->client
 	var closeBothOnce sync.Once
 	closeBoth := func() {
 		closeBothOnce.Do(func() {
@@ -238,6 +249,7 @@ func pumpPreparedTunnelReader(
 	egressBytesCh := make(chan copyResult, 1)
 	go func() {
 		n, copyErr := io.Copy(session.upstreamConn, clientToUpstream)
+		firstEnded.CompareAndSwap(0, 1)
 		if !isBenignTunnelCopyError(copyErr) || !closeWriteConn(session.upstreamConn) {
 			closeBoth()
 		}
@@ -250,6 +262,7 @@ func pumpPreparedTunnelReader(
 			upstreamReader = &firstByteReader{reader: session.upstreamConn, onFirstByte: opts.onFirstIngressByte}
 		}
 		n, copyErr := io.Copy(clientConn, upstreamReader)
+		firstEnded.CompareAndSwap(0, 2)
 		if !isBenignTunnelCopyError(copyErr) || !closeWriteConn(clientConn) {
 			closeBoth()
 		}
@@ -285,7 +298,7 @@ func pumpPreparedTunnelReader(
 		result.proxyErr = ErrUpstreamRequestFailed
 		result.upstreamStage = "connect_client_to_upstream_copy"
 		result.upstreamErr = egressResult.err
-	case opts.requireBidirectionalTraffic && (ingressResult.n == 0 || egressResult.n == 0):
+	case egressResult.n > 0 && ingressResult.n == 0, opts.requireBidirectionalTraffic && (ingressResult.n == 0 || egressResult.n == 0):
 		result.netOK = false
 		result.proxyErr = ErrUpstreamRequestFailed
 		switch {
@@ -295,6 +308,24 @@ func pumpPreparedTunnelReader(
 			result.upstreamStage = "connect_no_ingress_traffic"
 		default:
 			result.upstreamStage = "connect_no_egress_traffic"
+		}
+	}
+	// io.Copy's direction alone cannot attribute errors: ingress may fail while
+	// writing to a closed client. Consult actual upstream IO and ignore teardown
+	// caused by the client's side. Long-lived tunnels with responses are not
+	// initial TLS failures and do not evict a working route on ordinary shutdown.
+	if observed, ok := session.upstreamConn.(*tlsLatencyConn); ok {
+		evidence := observed.observation()
+		invalidResponse := evidence.invalidResponse || (evidence.truncatedResponse && firstEnded.Load() == 2)
+		noResponse := ingressResult.n == 0 && egressResult.n > 0
+		result.upstreamFailure = invalidResponse ||
+			(noResponse && firstEnded.Load() == 2 && (evidence.tlsRequest || opts.requireBidirectionalTraffic || !isBenignTunnelCopyError(evidence.readErr))) ||
+			(ingressResult.n == 0 && firstEnded.Load() == 1 && !isBenignTunnelCopyError(evidence.writeErr))
+		if invalidResponse {
+			result.netOK = false
+			result.proxyErr = ErrUpstreamRequestFailed
+			result.upstreamStage = "connect_invalid_tls_response"
+			result.upstreamErr = errors.New("upstream returned an invalid initial TLS response")
 		}
 	}
 	return result

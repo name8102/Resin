@@ -58,7 +58,7 @@ func (m *mockHealthRecorder) RecordResult(hash node.Hash, success bool) {
 	}
 }
 
-func (m *mockHealthRecorder) RecordLatency(hash node.Hash, rawTarget string, latency *time.Duration) {
+func (m *mockHealthRecorder) RecordPassiveLatency(hash node.Hash, rawTarget string, latency *time.Duration) {
 	m.latencyCalls.Add(1)
 }
 
@@ -1148,7 +1148,7 @@ func TestHealthRecorderAsyncCall(t *testing.T) {
 	go h.RecordResult(hash, true)
 	go h.RecordResult(hash, false)
 	latency := 10 * time.Millisecond
-	go h.RecordLatency(hash, "example.com", &latency)
+	go h.RecordPassiveLatency(hash, "example.com", &latency)
 
 	// Give goroutines time to complete.
 	time.Sleep(50 * time.Millisecond)

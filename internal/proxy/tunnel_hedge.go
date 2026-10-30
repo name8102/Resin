@@ -50,7 +50,7 @@ func prepareHedgedConnectTunnel(ctx context.Context, deps tunnelDeps, platformNa
 		active[routed.Route.NodeHash] = routed.Route
 		lastRoute = routed.Route
 		if deps.health != nil {
-			go deps.health.RecordLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), nil)
+			go deps.health.RecordPassiveLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), nil)
 		}
 		go func() {
 			dialStart := time.Now()

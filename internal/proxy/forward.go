@@ -266,7 +266,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			excluded = append(excluded, route.NodeHash)
 			lifecycle.setRouteResult(route)
 			if p.health != nil {
-				go p.health.RecordLatency(route.NodeHash, netutil.ExtractDomain(r.Host), nil)
+				go p.health.RecordPassiveLatency(route.NodeHash, netutil.ExtractDomain(r.Host), nil)
 			}
 			transport = p.outboundHTTPTransport(routed)
 		}
@@ -395,7 +395,6 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("connect_hijack", errors.New("response writer does not support hijacking"))
 		lifecycle.setHTTPStatus(ErrUpstreamRequestFailed.HTTPCode)
-		prepare.session.recordResult(false)
 		writeProxyError(w, ErrUpstreamRequestFailed)
 		return
 	}
@@ -405,7 +404,6 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		prepare.session.upstreamConn.Close()
 		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("connect_hijack", err)
-		prepare.session.recordResult(false)
 		return
 	}
 
@@ -438,7 +436,7 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		lifecycle.setUpstreamError(relay.upstreamStage, relay.upstreamErr)
 	}
 	lifecycle.setNetOK(relay.netOK)
-	prepare.session.recordResult(relay.netOK)
+	prepare.session.recordResult(relay)
 }
 
 // shouldRecordForwardCopyFailure decides whether an HTTP response body copy

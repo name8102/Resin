@@ -146,6 +146,7 @@ func TestRandomRoute_SingleNodeTrustsViewWithoutPoolValidation(t *testing.T) {
 		[]string{"cloudflare.com"},
 		10*time.Minute,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("randomRoute failed: %v", err)
@@ -175,12 +176,12 @@ func TestRandomRoute_PrefersMeasuredTargetOverUnknownAndAuthority(t *testing.T) 
 	pool.rebuildPlatformView(plat)
 	stats := NewIPLoadStats()
 	for i := 0; i < 20; i++ {
-		got, err := randomRoute(plat, stats, pool, "example.com", []string{"cloudflare.com"}, time.Minute, nil)
+		got, err := randomRoute(plat, stats, pool, "example.com", []string{"cloudflare.com"}, time.Minute, nil, nil)
 		if err != nil || got != target {
 			t.Fatalf("known target route lost to unmeasured candidate: %v %v", got, err)
 		}
 	}
-	got, err := randomRoute(plat, stats, pool, "example.com", []string{"cloudflare.com"}, time.Minute, func(h node.Hash) bool { return h != target })
+	got, err := randomRoute(plat, stats, pool, "example.com", []string{"cloudflare.com"}, time.Minute, func(h node.Hash) bool { return h != target }, nil)
 	if err != nil || got != authority {
 		t.Fatalf("excluded target should fall back to known authority: %v %v", got, err)
 	}
@@ -200,7 +201,7 @@ func TestRandomRoute_IgnoresExpiredEvidenceAndChoosesLowerScore(t *testing.T) {
 	entry.LatencyTable.Update("example.com", 50*time.Millisecond, time.Minute)
 	pool.addEntry(fast, entry)
 	pool.rebuildPlatformView(plat)
-	got, err := randomRoute(plat, NewIPLoadStats(), pool, "example.com", nil, time.Minute, nil)
+	got, err := randomRoute(plat, NewIPLoadStats(), pool, "example.com", nil, time.Minute, nil, nil)
 	if err != nil || got != fast {
 		t.Fatalf("want recent fastest route, got %v %v", got, err)
 	}

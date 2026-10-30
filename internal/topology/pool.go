@@ -591,6 +591,17 @@ func (p *GlobalNodePool) currentMaxConsecutiveFailures() int {
 // rawTarget is normalized through ExtractDomain (eTLD+1). latency may be nil,
 // which means "attempt only" without latency sample writeback.
 func (p *GlobalNodePool) RecordLatency(hash node.Hash, rawTarget string, latency *time.Duration) {
+	p.recordLatency(hash, rawTarget, latency, false)
+}
+
+// RecordPassiveLatency records traffic activity and an optional latency sample.
+// Failed attempts (nil latency) keep the node hot without changing active-probe
+// timestamps or writing a positive sample.
+func (p *GlobalNodePool) RecordPassiveLatency(hash node.Hash, rawTarget string, latency *time.Duration) {
+	p.recordLatency(hash, rawTarget, latency, true)
+}
+
+func (p *GlobalNodePool) recordLatency(hash node.Hash, rawTarget string, latency *time.Duration, passive bool) {
 	entry, ok := p.nodes.Load(hash)
 	if !ok {
 		return
@@ -599,12 +610,16 @@ func (p *GlobalNodePool) RecordLatency(hash node.Hash, rawTarget string, latency
 	domain := netutil.ExtractDomain(rawTarget)
 	isAuthority := p.isAuthorityDomain(domain)
 	nowNs := time.Now().UnixNano()
-	entry.LastLatencyProbeAttempt.Store(nowNs)
-	if isAuthority {
-		entry.LastAuthorityLatencyProbeAttempt.Store(nowNs)
-	}
-	if p.onNodeDynamicChanged != nil {
-		p.onNodeDynamicChanged(hash)
+	if passive {
+		entry.LastPassiveActivity.Store(nowNs)
+	} else {
+		entry.LastLatencyProbeAttempt.Store(nowNs)
+		if isAuthority {
+			entry.LastAuthorityLatencyProbeAttempt.Store(nowNs)
+		}
+		if p.onNodeDynamicChanged != nil {
+			p.onNodeDynamicChanged(hash)
+		}
 	}
 
 	if latency == nil || *latency <= 0 || entry.LatencyTable == nil {

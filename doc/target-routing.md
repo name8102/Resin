@@ -3,19 +3,34 @@
 A node can pass the Google latency probe while refusing another destination.
 Global probe health therefore remains separate from passive target failures.
 
-- New routes prefer recent target-domain observations, then recent authority
-  probes, then unmeasured nodes. Within the strongest evidence tier, the existing
-  platform latency/load policy determines the winner; equal scores are randomized.
-  This replaces random two-node sampling, which frequently missed working routes
-  in large pools. Existing account leases are retained while routable.
-- Probe latency includes proxy connection setup through target TLS completion
-  (first response byte for plain HTTP). Passive tunnel samples include dial time
-  plus first-write-to-first-response time, including when Read starts before Write.
-- A failed upstream dial cools down that **platform + node + host:port** route
-  for five minutes. Subdomains and ports remain independent; a Google probe or
-  an older successful tunnel does not clear the cooldown.
-- Cooldowns live only in memory, are capped at 8,192 entries, and expire lazily.
-  They are ignored when a platform disables passive circuit breaking.
+- New routes rank exact **platform + node + host:port** response evidence first:
+  two recent responses outrank one, followed by domain latency, authority probes,
+  unknown nodes, and unrecovered failure history. Within an actual-response tier,
+  the three best policy scores share new routes randomly. Existing account leases
+  remain sticky while routable; sibling origins do not inherit exact success.
+- Initial upstream failures, including TLS requests ending without a response,
+  cool down that exact origin for 5, 10, 20, then at most 30 minutes. After the
+  cooldown, old low-latency samples do not immediately restore priority: failure
+  history remains lower-ranked for another 30 minutes until a new valid response.
+  Neither Google probes nor older connections can clear a newer target failure.
+- Response/failure history shares one in-memory cache capped at 8,192 entries.
+  Passive-breaker-disabled platforms ignore penalties; request exclusions remain.
+- Probe latency includes proxy setup through TLS completion (first response byte
+  for plain HTTP). Passive tunnel timing includes dial plus first-write-to-response
+  time, even when Read starts before Write. For TLS-looking requests, a bounded
+  six-byte prefix must identify a ServerHello before a positive sample is written;
+  alerts, wrong protocols, and truncated replies do not create positive evidence.
+  This observes TLS framing, not certificate validity or full handshake completion.
+- Health success is recorded at the first qualifying response, not when an old
+  long-lived tunnel closes. Initial failure feedback distinguishes upstream IO
+  from client cancellation; idle/server-push-only sessions and local hijack errors
+  do not reset or increment node-health counters. Established connection shutdowns
+  do not masquerade as initial TLS failures.
+- Passive traffic updates activity and latency independently of active-probe
+  attempt timestamps. Nodes active within the latency window are re-probed at
+  half that window (minimum one minute, bounded by the configured probe interval).
+  Cold nodes keep their configured probe cadence and all probes use existing
+  worker limits; failed user traffic cannot defer active verification indefinitely.
 - Anonymous CONNECT/SOCKS5 connections hedge at most eight distinct nodes,
   starting backups 200 ms apart within a shared 4.3-second dial budget. The
   first successful connection wins; canceled or late candidates are closed.

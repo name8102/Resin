@@ -36,6 +36,7 @@ type ProbeConfig struct {
 	MaxEgressTestInterval           func() time.Duration
 	MaxLatencyTestInterval          func() time.Duration
 	MaxAuthorityLatencyTestInterval func() time.Duration
+	LatencyWindow                   func() time.Duration // refresh active nodes within the P2C sample window
 
 	LatencyTestURL     func() string
 	LatencyAuthorities func() []string
@@ -65,6 +66,7 @@ type ProbeManager struct {
 	maxEgressTestInterval           func() time.Duration
 	maxLatencyTestInterval          func() time.Duration
 	maxAuthorityLatencyTestInterval func() time.Duration
+	latencyWindow                   func() time.Duration
 	latencyTestURL                  func() string
 	latencyAuthorities              func() []string
 	onProbeEvent                    func(kind string)
@@ -75,6 +77,8 @@ const (
 	egressTraceDomain     = "cloudflare.com"
 	defaultLatencyTestURL = "https://www.gstatic.com/generate_204"
 	defaultQueueCap       = 1024
+	// A malformed tiny latency window must not turn busy nodes into a probe loop.
+	minHotLatencyInterval = time.Minute
 )
 
 type probePriority uint8
@@ -267,6 +271,7 @@ func NewProbeManager(cfg ProbeConfig) *ProbeManager {
 		maxEgressTestInterval:           cfg.MaxEgressTestInterval,
 		maxLatencyTestInterval:          cfg.MaxLatencyTestInterval,
 		maxAuthorityLatencyTestInterval: cfg.MaxAuthorityLatencyTestInterval,
+		latencyWindow:                   cfg.LatencyWindow,
 		latencyTestURL:                  cfg.LatencyTestURL,
 		latencyAuthorities:              cfg.LatencyAuthorities,
 		onProbeEvent:                    cfg.OnProbeEvent,
@@ -711,6 +716,18 @@ func (m *ProbeManager) isLatencyProbeDue(
 	authorities []string,
 	lookahead time.Duration,
 ) bool {
+	if m.latencyWindow != nil {
+		window := m.latencyWindow()
+		lastPassive := entry.LastPassiveActivity.Load()
+		if window > 0 && lastPassive > 0 && now.Sub(time.Unix(0, lastPassive)) <= window {
+			interval := max(window/2, minHotLatencyInterval)
+			maxLatencyInterval = min(maxLatencyInterval, interval)
+			maxAuthorityInterval = min(maxAuthorityInterval, interval)
+			// Keep the minimum retry spacing intact; the scan cadence supplies jitter.
+			lookahead = 0
+		}
+	}
+
 	lastAny := entry.LastLatencyProbeAttempt.Load()
 	if lastAny == 0 {
 		return true
