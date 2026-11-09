@@ -10,12 +10,28 @@ type Platform struct {
 	StickyTTLNs                      int64  `json:"sticky_ttl_ns"`
 	RegexFilters                     []string
 	RegionFilters                    []string
-	ReverseProxyMissAction           string `json:"reverse_proxy_miss_action"`
-	ReverseProxyEmptyAccountBehavior string `json:"reverse_proxy_empty_account_behavior"`
-	ReverseProxyFixedAccountHeader   string `json:"reverse_proxy_fixed_account_header"`
-	AllocationPolicy                 string `json:"allocation_policy"`
-	PassiveCircuitBreakerDisabled    bool   `json:"passive_circuit_breaker_disabled"`
-	UpdatedAtNs                      int64  `json:"updated_at_ns"`
+	DomainRegionRules                []DomainRegionRule `json:"domain_region_rules"`
+	ReverseProxyMissAction           string             `json:"reverse_proxy_miss_action"`
+	ReverseProxyEmptyAccountBehavior string             `json:"reverse_proxy_empty_account_behavior"`
+	ReverseProxyFixedAccountHeader   string             `json:"reverse_proxy_fixed_account_header"`
+	AllocationPolicy                 string             `json:"allocation_policy"`
+	PassiveCircuitBreakerDisabled    bool               `json:"passive_circuit_breaker_disabled"`
+	UpdatedAtNs                      int64              `json:"updated_at_ns"`
+}
+
+// DomainRegionRule restricts a domain and its subdomains to these exit regions.
+// The longest matching domain wins; platform-wide filters still apply.
+type DomainRegionRule struct {
+	Domain  string   `json:"domain"`
+	Regions []string `json:"regions"`
+}
+
+func CloneDomainRegionRules(rules []DomainRegionRule) []DomainRegionRule {
+	cloned := make([]DomainRegionRule, len(rules))
+	for i, rule := range rules {
+		cloned[i] = DomainRegionRule{Domain: rule.Domain, Regions: append([]string(nil), rule.Regions...)}
+	}
+	return cloned
 }
 
 // Subscription represents a node subscription source.

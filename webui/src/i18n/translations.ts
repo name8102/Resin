@@ -4,6 +4,13 @@ export const APP_TITLE_ZH = "Resin · 高性能粘性代理池";
 const APP_TITLE_EN = "Resin · Sticky Proxy Pool";
 
 const EXACT_ZH_TO_EN: Record<string, string> = {
+  "域名地区规则": "Domain Region Rules",
+  "每行一条，如 chatgpt.com = us,jp": "One rule per line, e.g. chatgpt.com = us,jp",
+  "包含子域名，最具体的域名优先；与平台地区过滤取交集。没有符合地区的节点时请求失败。": "Includes subdomains; the most specific domain wins. Intersects platform region filters. Requests fail when no node matches the required regions.",
+  "域名地区规则格式：域名 = 地区代码，如 chatgpt.com = us,jp": "Format: domain = region codes, e.g. chatgpt.com = us,jp",
+  "域名地区规则不能包含重复域名": "Domain region rules must not contain duplicate domains",
+  "地区代码须为两个字母，可用 ! 排除地区": "Use two-letter region codes; prefix ! to exclude a region",
+  "域名地区规则格式错误": "Invalid domain region rule format",
   "Resin · 高性能粘性代理池": APP_TITLE_EN,
   "高性能粘性代理池 · 管理面板": "High-performance sticky proxy pool · Admin Console",
   "主导航": "Main Navigation",

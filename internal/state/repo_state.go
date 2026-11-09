@@ -102,6 +102,15 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 		return fmt.Errorf("platform name: %w", err)
 	}
 
+	domainRules, err := platform.NormalizeDomainRegionRules(p.DomainRegionRules)
+	if err != nil {
+		return err
+	}
+	domainRulesJSON, err := json.Marshal(domainRules)
+	if err != nil {
+		return fmt.Errorf("encode platform %s domain_region_rules: %w", p.ID, err)
+	}
+
 	// Validate strongly-typed filters before persistence.
 	if _, err := platform.CompileRegexFilters(p.RegexFilters); err != nil {
 		return err
@@ -152,8 +161,8 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 		INSERT INTO platforms (id, name, sticky_ttl_ns, regex_filters_json, region_filters_json,
 		                       reverse_proxy_miss_action, reverse_proxy_empty_account_behavior,
 		                       reverse_proxy_fixed_account_header, allocation_policy,
-		                       passive_circuit_breaker_disabled, updated_at_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                       passive_circuit_breaker_disabled, updated_at_ns, domain_region_rules_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name                     = excluded.name,
 			sticky_ttl_ns            = excluded.sticky_ttl_ns,
@@ -164,10 +173,11 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 			reverse_proxy_fixed_account_header   = excluded.reverse_proxy_fixed_account_header,
 			allocation_policy        = excluded.allocation_policy,
 			passive_circuit_breaker_disabled = excluded.passive_circuit_breaker_disabled,
-			updated_at_ns            = excluded.updated_at_ns
+			updated_at_ns            = excluded.updated_at_ns,
+			domain_region_rules_json = excluded.domain_region_rules_json
 	`, p.ID, p.Name, p.StickyTTLNs, regexFiltersJSON, regionFiltersJSON,
 		p.ReverseProxyMissAction, p.ReverseProxyEmptyAccountBehavior, p.ReverseProxyFixedAccountHeader,
-		p.AllocationPolicy, p.PassiveCircuitBreakerDisabled, p.UpdatedAtNs)
+		p.AllocationPolicy, p.PassiveCircuitBreakerDisabled, p.UpdatedAtNs, string(domainRulesJSON))
 	if err != nil {
 		if isSQLiteUniqueConstraint(err) {
 			return fmt.Errorf("%w: platform name already exists", ErrConflict)
@@ -223,15 +233,15 @@ func (r *StateRepo) GetPlatform(id string) (*model.Platform, error) {
 	row := r.db.QueryRow(`SELECT id, name, sticky_ttl_ns, regex_filters_json, region_filters_json,
 			reverse_proxy_miss_action, reverse_proxy_empty_account_behavior,
 			reverse_proxy_fixed_account_header, allocation_policy,
-			passive_circuit_breaker_disabled, updated_at_ns
+			passive_circuit_breaker_disabled, updated_at_ns, domain_region_rules_json
 			FROM platforms WHERE id = ?`, id)
 
 	var p model.Platform
-	var regexFiltersJSON, regionFiltersJSON string
+	var regexFiltersJSON, regionFiltersJSON, domainRulesJSON string
 	var passiveCircuitBreakerDisabled int
 	if err := row.Scan(&p.ID, &p.Name, &p.StickyTTLNs, &regexFiltersJSON,
 		&regionFiltersJSON, &p.ReverseProxyMissAction, &p.ReverseProxyEmptyAccountBehavior,
-		&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled, &p.UpdatedAtNs); err != nil {
+		&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled, &p.UpdatedAtNs, &domainRulesJSON); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
@@ -246,6 +256,9 @@ func (r *StateRepo) GetPlatform(id string) (*model.Platform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode platform %s region_filters_json: %w", p.ID, err)
 	}
+	if err := json.Unmarshal([]byte(domainRulesJSON), &p.DomainRegionRules); err != nil {
+		return nil, fmt.Errorf("decode platform %s domain_region_rules_json: %w", p.ID, err)
+	}
 	p.RegexFilters = regexFilters
 	p.RegionFilters = regionFilters
 	return &p, nil
@@ -253,7 +266,7 @@ func (r *StateRepo) GetPlatform(id string) (*model.Platform, error) {
 
 // ListPlatforms returns all platforms.
 func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
-	rows, err := r.db.Query("SELECT id, name, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, updated_at_ns FROM platforms")
+	rows, err := r.db.Query("SELECT id, name, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, updated_at_ns, domain_region_rules_json FROM platforms")
 	if err != nil {
 		return nil, err
 	}
@@ -262,11 +275,11 @@ func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
 	var result []model.Platform
 	for rows.Next() {
 		var p model.Platform
-		var regexFiltersJSON, regionFiltersJSON string
+		var regexFiltersJSON, regionFiltersJSON, domainRulesJSON string
 		var passiveCircuitBreakerDisabled int
 		if err := rows.Scan(&p.ID, &p.Name, &p.StickyTTLNs, &regexFiltersJSON,
 			&regionFiltersJSON, &p.ReverseProxyMissAction, &p.ReverseProxyEmptyAccountBehavior,
-			&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled, &p.UpdatedAtNs); err != nil {
+			&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled, &p.UpdatedAtNs, &domainRulesJSON); err != nil {
 			return nil, err
 		}
 		p.PassiveCircuitBreakerDisabled = passiveCircuitBreakerDisabled != 0
@@ -277,6 +290,9 @@ func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
 		regionFilters, err := decodeStringSliceJSON(regionFiltersJSON)
 		if err != nil {
 			return nil, fmt.Errorf("decode platform %s region_filters_json: %w", p.ID, err)
+		}
+		if err := json.Unmarshal([]byte(domainRulesJSON), &p.DomainRegionRules); err != nil {
+			return nil, fmt.Errorf("decode platform %s domain_region_rules_json: %w", p.ID, err)
 		}
 		p.RegexFilters = regexFilters
 		p.RegionFilters = regionFilters

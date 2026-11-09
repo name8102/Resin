@@ -24,8 +24,10 @@ Global probe health therefore remains separate from passive target failures.
   after this bidirectional progress. EOF after ServerHello and stalled handshakes
   now feed node-wide blacklisting instead of merely generating a fast latency.
 - New routes rank exact **platform + node + host:port** response evidence first:
-  two recent responses outrank one, followed by domain latency, authority probes,
-  unknown nodes, and unrecovered failure history. Within an actual-response tier,
+  followed by platform-wide real responses, domain latency, authority probes,
+  unknown nodes, and unrecovered failure history. Successful sample count does
+  not create a hard rank: candidates use independently decaying response
+  reliability, first-response latency and active-download rate. Within an actual-response tier,
   the three best policy scores share new routes randomly. Existing account leases
   remain sticky while routable; sibling origins do not inherit exact success.
 - Initial upstream failures, including TLS requests ending without a response,
@@ -69,4 +71,60 @@ Global probe health therefore remains separate from passive target failures.
   circuit breaking is disabled. Existing global health feedback continues for
   each failed attempt; the request log identifies the final selected node.
 
-Subscriptions, platform filters, and account identity rules are unchanged.
+## Scoring and exploration
+
+- Successful responses and attributable initial upstream failures retain separate,
+  exponentially decaying evidence. Recovery does not erase historical failures;
+  with no failures, collecting more successes gives no reliability bonus.
+- Exact-origin failure only changes that origin's evidence. Node-wide quarantine
+  remains independently enforced by the existing probe/health pipeline.
+- First-response timing comes from HTTP transport traces or qualified tunnel TLS
+  progress. Target download rates use real windows of at least 64 KiB / 100 ms,
+  discard gaps over two seconds, and never treat total connection lifetime as
+  download time. A missing metric remains unknown. HTTP bodies have per-request
+  samples; shared HTTP connections retain their separate node-wide estimates.
+- Every 32 initial route requests earn one exploration allocation, with at most
+  two saved allocations per platform and exact origin. Retries neither earn nor
+  spend credit. Exploration only selects ranked healthy candidates passing all
+  filters. Account leases remain sticky; no live connection is migrated or replayed.
+- These observations share the bounded in-memory target cache. Request-log restore
+  seeds response reliability, not latency or throughput. Scoring needs no extra
+  active speed tests or tuning parameters.
+
+## Domain-specific exit regions
+
+Platforms accept `domain_region_rules` on creation and PATCH:
+
+```json
+{
+  "domain_region_rules": [
+    { "domain": "chatgpt.com", "regions": ["us", "jp"] },
+    { "domain": "api.chatgpt.com", "regions": ["us"] }
+  ]
+}
+```
+
+A domain includes itself and its subdomains, with DNS label boundaries. The
+longest matching domain wins, independent of array order. Domains normalize to
+lowercase ASCII/IDNA and ignore a final dot. URLs, ports, IP literals, wildcards,
+empty region lists and duplicate normalized domains are rejected. Regions use
+the same lowercase two-letter include/exclude syntax as platform filters.
+
+Rules intersect the platform's existing routable view. Exit probe metadata takes
+precedence over GeoIP of the exit IP; unknown regions do not satisfy a rule.
+Anonymous routes, account-lease reuse, same-IP rotation and request retries all
+respect the selected rule. With no matching node, the request fails instead of
+falling back to another region. An account retains one lease per platform: a
+request requiring a different region replaces an incompatible lease.
+
+In platform creation/editing, enter one rule per line:
+
+```text
+chatgpt.com = us,jp
+api.chatgpt.com = us
+example.com = !cn
+```
+
+PATCH `{"domain_region_rules": []}` clears all rules. Rules persist in state.db
+and are restored on restart. Existing platforms start with no domain rules;
+subscription selection and account-identity rules remain unchanged.

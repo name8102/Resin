@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { allocationPolicies, emptyAccountBehaviors, missActions } from "./constants";
-import { parseHeaderLines, parseLinesToList } from "./formParsers";
+import { parseDomainRegionRules, parseHeaderLines, parseLinesToList } from "./formParsers";
 import type { Platform, PlatformCreateInput, PlatformUpdateInput } from "./types";
 
 const platformNameForbiddenChars = ".:|/\\@?#%~";
@@ -33,12 +33,18 @@ export const platformFormSchema = z.object({
   sticky_ttl: z.string().optional(),
   regex_filters_text: z.string().optional(),
   region_filters_text: z.string().optional(),
+  domain_region_rules_text: z.string().optional(),
   reverse_proxy_miss_action: z.enum(missActions),
   reverse_proxy_empty_account_behavior: z.enum(emptyAccountBehaviors),
   reverse_proxy_fixed_account_header: z.string().optional(),
   allocation_policy: z.enum(allocationPolicies),
   passive_circuit_breaker_disabled: z.boolean(),
 }).superRefine((value, ctx) => {
+  try {
+    parseDomainRegionRules(value.domain_region_rules_text);
+  } catch (error) {
+    ctx.addIssue({ code: "custom", path: ["domain_region_rules_text"], message: error instanceof Error ? error.message : "域名地区规则格式错误" });
+  }
   if (
     value.reverse_proxy_empty_account_behavior === "FIXED_HEADER" &&
     parseHeaderLines(value.reverse_proxy_fixed_account_header).length === 0
@@ -58,6 +64,7 @@ export const defaultPlatformFormValues: PlatformFormValues = {
   sticky_ttl: "",
   regex_filters_text: "",
   region_filters_text: "",
+  domain_region_rules_text: "",
   reverse_proxy_miss_action: "TREAT_AS_EMPTY",
   reverse_proxy_empty_account_behavior: "RANDOM",
   reverse_proxy_fixed_account_header: "Authorization",
@@ -74,6 +81,7 @@ export function platformToFormValues(platform: Platform): PlatformFormValues {
     sticky_ttl: platform.sticky_ttl,
     regex_filters_text: regexFilters.join("\n"),
     region_filters_text: regionFilters.join("\n"),
+    domain_region_rules_text: platform.domain_region_rules.map((rule) => `${rule.domain} = ${rule.regions.join(",")}`).join("\n"),
     reverse_proxy_miss_action: platform.reverse_proxy_miss_action,
     reverse_proxy_empty_account_behavior: platform.reverse_proxy_empty_account_behavior,
     reverse_proxy_fixed_account_header: platform.reverse_proxy_fixed_account_header,
@@ -87,6 +95,7 @@ function toPlatformPayloadBase(values: PlatformFormValues) {
     name: values.name.trim(),
     regex_filters: parseLinesToList(values.regex_filters_text),
     region_filters: parseLinesToList(values.region_filters_text, (value) => value.toLowerCase()),
+    domain_region_rules: parseDomainRegionRules(values.domain_region_rules_text),
     reverse_proxy_miss_action: values.reverse_proxy_miss_action,
     reverse_proxy_empty_account_behavior: values.reverse_proxy_empty_account_behavior,
     reverse_proxy_fixed_account_header: parseHeaderLines(values.reverse_proxy_fixed_account_header).join("\n"),

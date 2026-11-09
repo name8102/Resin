@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sync"
 
+	"github.com/Resinat/Resin/internal/model"
 	"github.com/Resinat/Resin/internal/node"
 )
 
@@ -29,8 +30,9 @@ type Platform struct {
 	Name string
 
 	// Filter configuration.
-	RegexFilters  node.TagFilter
-	RegionFilters []string // lowercase ISO codes, supports negation "!xx"
+	RegexFilters      node.TagFilter
+	RegionFilters     []string // lowercase ISO codes, supports negation "!xx"
+	DomainRegionRules []model.DomainRegionRule
 
 	// Other config fields.
 	StickyTTLNs                      int64

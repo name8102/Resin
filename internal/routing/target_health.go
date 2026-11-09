@@ -29,20 +29,25 @@ type targetHealthKey struct {
 }
 
 type targetHealth struct {
-	key         targetHealthKey
-	lastFailure time.Time
-	until       time.Time
-	failures    int
-	// The latest two responses suffice to distinguish recent stable success.
-	success         time.Time
-	previousSuccess time.Time
+	key               targetHealthKey
+	lastFailure       time.Time
+	until             time.Time
+	failures          int
+	success           time.Time
+	responses         targetResponseEvidence
+	latency           targetQualitySample
+	speed             targetQualitySample
+	explorationAt     time.Time
+	explorationCredit int
 }
 
 type targetEvidence struct {
-	successes int
-	proven    int // real responses on this platform, across exact origins
-	failed    bool
-	cooling   bool
+	reliability float64
+	proven      float64 // fresh real responses on this platform, across exact origins
+	latency     time.Duration
+	speed       float64
+	failed      bool
+	cooling     bool
 }
 
 // Exact-origin health is bounded and independent of global probe health.
@@ -61,7 +66,9 @@ func (c *targetHealthCache) get(key targetHealthKey, now time.Time, window time.
 	health := e.Value.(targetHealth)
 	failureExpired := health.lastFailure.IsZero() || !now.Before(health.until.Add(targetFailureRetention))
 	successExpired := health.success.IsZero() || !isRecent(health.success, now, window)
-	if failureExpired && successExpired {
+	qualityExpired := health.latency.freshness(now, window) == 0 && health.speed.freshness(now, passiveSpeedWindow) == 0
+	explorationExpired := health.explorationAt.IsZero() || !isRecent(health.explorationAt, now, knownNodeWindow)
+	if failureExpired && successExpired && qualityExpired && explorationExpired {
 		delete(c.entries, key)
 		c.order.Remove(e)
 		return targetHealth{key: key}
@@ -90,6 +97,7 @@ func (c *targetHealthCache) failure(key targetHealthKey, now time.Time, window t
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	health := c.get(key, now, window)
+	health.responses.observe(false, now, window)
 	health.failures = min(health.failures+1, 4)
 	cooldown := targetFailureCooldown
 	for i := 1; i < health.failures && cooldown < maxTargetFailureCooldown; i++ {
@@ -97,22 +105,25 @@ func (c *targetHealthCache) failure(key targetHealthKey, now time.Time, window t
 	}
 	health.lastFailure = now
 	health.until = now.Add(cooldown)
-	health.success, health.previousSuccess = time.Time{}, time.Time{}
+	health.success = time.Time{}
+	health.latency, health.speed = targetQualitySample{}, targetQualitySample{}
 	c.put(health)
 }
 
-func (c *targetHealthCache) success(key targetHealthKey, selectedAt, now time.Time, window time.Duration) {
+func (c *targetHealthCache) success(key targetHealthKey, selectedAt, now time.Time, window time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	health := c.get(key, now, window)
 	// A response from a connection picked before the latest failure cannot
 	// rehabilitate this origin, even if that connection outlives the cooldown.
 	if selectedAt.IsZero() || !selectedAt.After(health.lastFailure) || now.Before(health.until) {
-		return
+		return false
 	}
-	health.previousSuccess, health.success = health.success, now
+	health.responses.observe(true, now, window)
+	health.success = now
 	health.failures = 0
 	c.put(health)
+	return true
 }
 
 func (c *targetHealthCache) evidence(key targetHealthKey, now time.Time, window time.Duration) targetEvidence {
@@ -121,11 +132,10 @@ func (c *targetHealthCache) evidence(key targetHealthKey, now time.Time, window 
 	health := c.get(key, now, window)
 	evidence := targetEvidence{failed: !health.lastFailure.IsZero() && health.success.IsZero(), cooling: now.Before(health.until)}
 	if !health.success.IsZero() && isRecent(health.success, now, window) {
-		evidence.successes = 1
-		if !health.previousSuccess.IsZero() && isRecent(health.previousSuccess, now, window) {
-			evidence.successes = 2
-		}
+		evidence.reliability = evidenceFreshness(health.success, now, window) * health.responses.reliability(now, window)
 	}
+	evidence.latency = time.Duration(health.latency.estimate(now, window, float64(defaultResponseLatency)))
+	evidence.speed = health.speed.estimate(now, passiveSpeedWindow, defaultDownloadSpeed)
 	return evidence
 }
 
@@ -138,9 +148,6 @@ func (r *Router) ReportTargetFailure(route RouteResult, target string) {
 	}
 	now := time.Now()
 	r.targetHealth.failure(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, now, r.p2cWindow())
-	if contributesNodeEvidence(target) {
-		r.targetHealth.failure(targetHealthKey{route.PlatformID, route.NodeHash, ""}, now, knownNodeWindow)
-	}
 }
 
 // ReportTargetSuccess records an actual target response, not a successful dial
@@ -151,16 +158,17 @@ func (r *Router) ReportTargetSuccess(route RouteResult, target string) {
 		return
 	}
 	now := time.Now()
-	r.targetHealth.success(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, route.selectedAt, now, r.p2cWindow())
-	if contributesNodeEvidence(target) {
+	accepted := r.targetHealth.success(targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}, route.selectedAt, now, r.p2cWindow())
+	if accepted && contributesNodeEvidence(target) {
 		r.targetHealth.success(targetHealthKey{route.PlatformID, route.NodeHash, ""}, route.selectedAt, now, knownNodeWindow)
 	}
 }
 
 type routeTarget struct {
-	domain   string
-	allows   func(node.Hash) bool
-	evidence func(node.Hash) targetEvidence
+	domain      string
+	allows      func(node.Hash) bool
+	evidence    func(node.Hash) targetEvidence
+	exploration func() bool
 }
 
 func (r *Router) routeTarget(plat *platform.Platform, target string, excluded []node.Hash, now time.Time) routeTarget {
@@ -168,13 +176,27 @@ func (r *Router) routeTarget(plat *platform.Platform, target string, excluded []
 	window := r.p2cWindow()
 	evidence := func(h node.Hash) targetEvidence {
 		result := r.targetHealth.evidence(targetHealthKey{plat.ID, h, address}, now, window)
-		result.proven = r.targetHealth.evidence(targetHealthKey{plat.ID, h, ""}, now, knownNodeWindow).successes
+		result.proven = r.targetHealth.evidence(targetHealthKey{plat.ID, h, ""}, now, knownNodeWindow).reliability
 		if plat.PassiveCircuitBreakerDisabled {
 			result.failed, result.cooling = false, false
 		}
 		return result
 	}
+	// The budget belongs to the destination, not a node. Retries do not mint
+	// credits or trigger trials, and sticky hits never reassign their lease.
+	budgetKey := targetHealthKey{platformID: plat.ID, target: address}
+	if len(excluded) == 0 {
+		r.targetHealth.earnExploration(budgetKey, now, window)
+	}
+	var explored bool
 	return routeTarget{
+		exploration: func() bool {
+			if explored || len(excluded) != 0 {
+				return false
+			}
+			explored = true
+			return r.targetHealth.spendExploration(budgetKey, now, window)
+		},
 		domain: netutil.ExtractDomain(target),
 		allows: func(h node.Hash) bool {
 			if slices.Contains(excluded, h) {

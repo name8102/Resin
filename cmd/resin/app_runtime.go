@@ -153,7 +153,8 @@ func (a *resinApp) initTopologyRuntime(engine *state.StateEngine) (*netutil.Retr
 	// Phase 4: OutboundManager and Router (now that pool exists).
 	log.Println("OutboundManager initialized with lifecycle callbacks")
 	a.topoRuntime.router = routing.NewRouter(routing.RouterConfig{
-		Pool: a.topoRuntime.pool,
+		Pool:      a.topoRuntime.pool,
+		GeoLookup: a.geoSvc.Lookup,
 		Authorities: func() []string {
 			return runtimeConfigSnapshot(a.runtimeCfg).LatencyAuthorities
 		},

@@ -19,10 +19,9 @@ var randomRouteRNGPool = sync.Pool{
 }
 
 const (
-	preferredCandidates       = 3
-	maxRankedCandidates       = 12
-	candidateExplorationEvery = 32
-	passiveSpeedWindow        = 30 * time.Minute
+	preferredCandidates = 3
+	maxRankedCandidates = 12
+	passiveSpeedWindow  = 30 * time.Minute
 )
 
 type routeCandidate struct {
@@ -48,9 +47,9 @@ func betterCandidate(a, b routeCandidate) bool {
 }
 
 // randomRoute ranks the pool by real reachability before considering speed.
-// Most new connections share the three best proven candidates with score-based
-// weights. A 1/32 trial uses the next ranked, verified candidates; unknown or
-// failed origins never displace a working shortlist merely to explore.
+// Most allocations share the three best proven candidates with score-based
+// weights. Earned request credits permit a bounded trial of ranked healthy
+// candidates; unknown or failed origins never enter the exploration shortlist.
 func randomRoute(
 	plat *platform.Platform,
 	stats *IPLoadStats,
@@ -60,6 +59,7 @@ func randomRoute(
 	p2cWindow time.Duration,
 	allows func(node.Hash) bool,
 	evidence func(node.Hash) targetEvidence,
+	exploration func() bool,
 ) (node.Hash, error) {
 	view := plat.View()
 	if view.Size() == 0 {
@@ -91,19 +91,20 @@ func randomRoute(
 		} else if latency, measured = averageRecentAuthorityLatency(entry, authorities, now, p2cWindow); measured {
 			tier = 1
 		}
+		var health targetEvidence
 		if evidence != nil {
-			health := evidence(h)
+			health = evidence(h)
 			if health.proven > 0 {
 				tier = 3
 			}
-			if health.successes > 0 {
-				tier = 3 + health.successes
+			if health.reliability > 0 {
+				tier = 4
 			}
 			if health.failed {
 				tier = -1
 			}
 		}
-		candidate := routeCandidate{h, tier, connectionScore(h, entry, latency, plat, stats, pool, now)}
+		candidate := routeCandidate{h, tier, connectionScore(h, entry, latency, health, plat, stats, pool, now)}
 		i := count
 		for i > 0 && betterCandidate(candidate, ranked[i-1]) {
 			i--
@@ -127,7 +128,7 @@ func randomRoute(
 	for primary < min(count, preferredCandidates) && ranked[primary].tier == ranked[0].tier {
 		primary++
 	}
-	if primary < count && ranked[primary].tier >= 1 && rng.IntN(candidateExplorationEvery) == 0 {
+	if primary < count && ranked[primary].tier >= 1 && exploration != nil && exploration() {
 		end := primary
 		for end < count && end < primary+preferredCandidates && ranked[end].tier == ranked[primary].tier {
 			end++
@@ -156,16 +157,32 @@ func weightedCandidate(candidates []routeCandidate, ticket float64) node.Hash {
 // Estimate the cost of a representative 128KiB response from passive windows.
 // Unknown throughput gets a neutral 1MiB/s prior, not zero-cost "infinite speed".
 // Confidence is ranked separately, so a fast probe never beats real responses.
-func connectionScore(h node.Hash, entry *node.NodeEntry, latency time.Duration, plat *platform.Platform, stats *IPLoadStats, pool PoolAccessor, now time.Time) float64 {
-	if latency <= 0 {
-		latency = 750 * time.Millisecond
+func connectionScore(h node.Hash, entry *node.NodeEntry, latency time.Duration, health targetEvidence, plat *platform.Platform, stats *IPLoadStats, pool PoolAccessor, now time.Time) float64 {
+	if health.latency > 0 {
+		latency = health.latency
 	}
-	speed, measured := entry.Traffic.DownloadSpeed(now, passiveSpeedWindow)
-	if !measured {
-		speed = 1024 * 1024
+	if latency <= 0 {
+		latency = defaultResponseLatency
+	}
+	speed := health.speed
+	if speed <= 0 {
+		var measured bool
+		speed, measured = entry.Traffic.DownloadSpeed(now, passiveSpeedWindow)
+		if !measured {
+			speed = defaultDownloadSpeed
+		}
 	}
 	transfer := time.Duration(float64(128*1024) / max(speed, 1) * float64(time.Second))
 	cost := latency + min(transfer, 30*time.Second)
+	// Within an evidence source, age is a continuous cost rather than a count
+	// threshold that lets a second slow success defeat all faster candidates.
+	confidence := health.reliability
+	if confidence == 0 {
+		confidence = health.proven
+	}
+	if confidence > 0 {
+		cost = time.Duration(float64(cost) / (0.5 + 0.5*confidence))
+	}
 	if plat.AllocationPolicy == platform.AllocationPolicyPreferIdleIP {
 		base := calculateScore(h, cost, plat, stats, pool)
 		seconds := cost.Seconds()

@@ -159,7 +159,9 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 	}
 	if samplesPassiveTraffic(target) && deps.pool != nil {
 		entry, _ := deps.pool.GetEntry(routed.Route.NodeHash)
-		rawConn = newPassiveTrafficConn(rawConn, entry)
+		rawConn = newPassiveTrafficConn(rawConn, entry, func(rate float64) {
+			deps.router.ReportTargetQuality(routed.Route, target, 0, rate)
+		})
 	}
 	var upstreamBase net.Conn = rawConn
 	if deps.metricsSink != nil {
@@ -168,6 +170,7 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 	}
 	upstreamConn := newTLSLatencyConn(upstreamBase, dialElapsed, func(latency time.Duration) {
 		deps.router.ReportTargetSuccess(routed.Route, target)
+		deps.router.ReportTargetQuality(routed.Route, target, latency, 0)
 		recordPassiveResult(deps.health, routed.Route, target, true)
 		if deps.health != nil {
 			deps.health.RecordPassiveLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), &latency)

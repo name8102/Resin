@@ -99,6 +99,10 @@ func CompileModelRegexFilters(platformID string, regexFilters []string) (node.Ta
 
 // BuildFromModel builds a runtime platform from a persisted model.Platform.
 func BuildFromModel(mp model.Platform) (*Platform, error) {
+	domainRules, err := NormalizeDomainRegionRules(mp.DomainRegionRules)
+	if err != nil {
+		return nil, err
+	}
 	regexFilters, err := CompileModelRegexFilters(mp.ID, mp.RegexFilters)
 	if err != nil {
 		return nil, err
@@ -130,7 +134,7 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 		)
 	}
 
-	return NewConfiguredPlatform(
+	plat := NewConfiguredPlatform(
 		mp.ID,
 		mp.Name,
 		regexFilters,
@@ -141,5 +145,7 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 		fixedHeader,
 		mp.AllocationPolicy,
 		mp.PassiveCircuitBreakerDisabled,
-	), nil
+	)
+	plat.DomainRegionRules = domainRules
+	return plat, nil
 }

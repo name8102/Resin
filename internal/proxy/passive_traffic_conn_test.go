@@ -24,7 +24,7 @@ func (c *passiveReadConn) Read(p []byte) (int, error) { return len(p), nil }
 func passiveTestConn(t *testing.T) (*passiveTrafficConn, *node.NodeEntry, *time.Time) {
 	t.Helper()
 	entry := &node.NodeEntry{}
-	conn := newPassiveTrafficConn(&passiveReadConn{}, entry).(*passiveTrafficConn)
+	conn := newPassiveTrafficConn(&passiveReadConn{}, entry, nil).(*passiveTrafficConn)
 	now := time.Now()
 	conn.now = func() time.Time { return now }
 	return conn, entry, &now
@@ -91,7 +91,7 @@ func TestPassiveTrafficConnIgnoresTinyAndIdleTransfers(t *testing.T) {
 
 func TestPassiveTrafficConnHalfCloseAndConcurrentShutdown(t *testing.T) {
 	base := &passiveReadConn{}
-	conn := newPassiveTrafficConn(base, &node.NodeEntry{})
+	conn := newPassiveTrafficConn(base, &node.NodeEntry{}, nil)
 	if err := conn.(interface{ CloseWrite() error }).CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
@@ -115,11 +115,11 @@ func TestPassiveTrafficConnHalfCloseAndConcurrentShutdown(t *testing.T) {
 
 func TestPassiveTrafficConnPreservesReadError(t *testing.T) {
 	base := &stubConn{}
-	conn := newPassiveTrafficConn(base, &node.NodeEntry{})
+	conn := newPassiveTrafficConn(base, &node.NodeEntry{}, nil)
 	if n, err := conn.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("Read = %d, %v", n, err)
 	}
-	if got := newPassiveTrafficConn(base, nil); got != base {
+	if got := newPassiveTrafficConn(base, nil, nil); got != base {
 		t.Fatal("missing node should leave connection untouched")
 	}
 }
@@ -172,5 +172,24 @@ func TestPassiveTrafficTunnelWrapsProxiedDials(t *testing.T) {
 			t.Fatal("Syncthing tunnel should not be sampled")
 		}
 		_ = prepared.session.upstreamConn.Close()
+	}
+}
+
+func TestSampledResponseBodyUsesActiveWindows(t *testing.T) {
+	var rates []float64
+	body := newSampledResponseBody(io.NopCloser(&passiveReadConn{}), func(rate float64) { rates = append(rates, rate) }).(*sampledResponseBody)
+	now := time.Now()
+	body.now = func() time.Time { return now }
+	_, _ = body.Read(make([]byte, 32*1024))
+	now = now.Add(200 * time.Millisecond)
+	_, _ = body.Read(make([]byte, 32*1024))
+	if len(rates) != 1 || rates[0] != 327680 {
+		t.Fatalf("active rates: %v", rates)
+	}
+	_, _ = body.Read(make([]byte, 16*1024))
+	now = now.Add(time.Hour)
+	_ = body.Close()
+	if len(rates) != 1 {
+		t.Fatalf("idle/tiny tail produced a rate: %v", rates)
 	}
 }

@@ -362,6 +362,12 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ModifyResponse: func(resp *http.Response) error {
 			if hasRoute {
 				p.router.ReportTargetSuccess(route, parsed.Host)
+				p.router.ReportTargetQuality(route, parsed.Host, upstreamTrace.responseLatency(), 0)
+				if resp.StatusCode != http.StatusSwitchingProtocols {
+					resp.Body = newSampledResponseBody(resp.Body, func(rate float64) {
+						p.router.ReportTargetQuality(route, parsed.Host, 0, rate)
+					})
+				}
 			}
 			lifecycle.setHTTPStatus(resp.StatusCode)
 			lifecycle.addIngressBytes(headerWireLen(resp.Header))

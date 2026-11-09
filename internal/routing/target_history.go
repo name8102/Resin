@@ -33,15 +33,12 @@ func (r *Router) RestoreTargetHistory(records []TargetObservation) {
 		exact := targetHealthKey{plat.ID, record.NodeHash, normalizeRouteTarget(record.Target)}
 		global := targetHealthKey{plat.ID, record.NodeHash, ""}
 		if record.Success {
-			r.targetHealth.success(exact, record.SelectedAt, record.ObservedAt, r.p2cWindow())
-			if contributesNodeEvidence(record.Target) {
+			accepted := r.targetHealth.success(exact, record.SelectedAt, record.ObservedAt, r.p2cWindow())
+			if accepted && contributesNodeEvidence(record.Target) {
 				r.targetHealth.success(global, record.SelectedAt, record.ObservedAt, knownNodeWindow)
 			}
 		} else if !plat.PassiveCircuitBreakerDisabled {
 			r.targetHealth.failure(exact, record.ObservedAt, r.p2cWindow())
-			if contributesNodeEvidence(record.Target) {
-				r.targetHealth.failure(global, record.ObservedAt, knownNodeWindow)
-			}
 		}
 	}
 }

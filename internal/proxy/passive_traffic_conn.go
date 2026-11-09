@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -11,24 +12,75 @@ import (
 
 const passiveDownloadIdleGap = 2 * time.Second
 
-// passiveTrafficConn measures active download windows without polling or probes.
+// downloadSampler measures active windows, excluding idle gaps and close time.
+// Connections and HTTP response bodies share the same sampling rules.
+type downloadSampler struct {
+	now      func() time.Time
+	onSample func(int64, time.Duration, time.Time)
+	mu       sync.Mutex
+	started  time.Time
+	last     time.Time
+	bytes    int64
+	closed   bool
+}
+
+func (s *downloadSampler) observe(n int) {
+	if n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	now := s.now()
+	if s.started.IsZero() || now.Sub(s.last) > passiveDownloadIdleGap {
+		s.started = now
+		s.bytes = 0
+	}
+	s.last = now
+	s.bytes += int64(n)
+	if s.bytes >= 64*1024 && now.Sub(s.started) >= 100*time.Millisecond {
+		s.onSample(s.bytes, now.Sub(s.started), now)
+		s.started = time.Time{}
+		s.bytes = 0
+	}
+}
+
+func (s *downloadSampler) finish() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if active := s.last.Sub(s.started); s.bytes >= 64*1024 && active >= 100*time.Millisecond {
+		s.onSample(s.bytes, active, s.last)
+	}
+}
+
+// passiveTrafficConn measures live node-wide and optional target-specific rates.
 type passiveTrafficConn struct {
 	net.Conn
 	entry *node.NodeEntry
-	now   func() time.Time
-
-	mu      sync.Mutex
-	started time.Time
-	last    time.Time
-	bytes   int64
-	closed  bool
+	downloadSampler
 }
 
-func newPassiveTrafficConn(conn net.Conn, entry *node.NodeEntry) net.Conn {
-	if entry == nil {
+func newPassiveTrafficConn(conn net.Conn, entry *node.NodeEntry, onDownload func(float64)) net.Conn {
+	if entry == nil && onDownload == nil {
 		return conn
 	}
-	return &passiveTrafficConn{Conn: conn, entry: entry, now: time.Now}
+	return &passiveTrafficConn{Conn: conn, entry: entry, downloadSampler: downloadSampler{
+		now: time.Now,
+		onSample: func(bytes int64, active time.Duration, at time.Time) {
+			if entry != nil {
+				entry.Traffic.ObserveDownload(bytes, active, at)
+			}
+			if onDownload != nil {
+				onDownload(float64(bytes) / active.Seconds())
+			}
+		},
+	}}
 }
 
 func passiveTrafficWrapper(pool outbound.PoolAccessor) func(node.Hash, net.Conn) net.Conn {
@@ -37,7 +89,7 @@ func passiveTrafficWrapper(pool outbound.PoolAccessor) func(node.Hash, net.Conn)
 			return conn
 		}
 		entry, _ := pool.GetEntry(hash)
-		return newPassiveTrafficConn(conn, entry)
+		return newPassiveTrafficConn(conn, entry, nil)
 	}
 }
 
@@ -48,45 +100,40 @@ func samplesPassiveTraffic(target string) bool {
 
 func (c *passiveTrafficConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
-	if n <= 0 {
-		return n, err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return n, err
-	}
-	now := c.now()
-	if c.started.IsZero() || now.Sub(c.last) > passiveDownloadIdleGap {
-		c.started = now
-		c.bytes = 0
-	}
-	c.last = now
-	c.bytes += int64(n)
-	if c.bytes >= 64*1024 && now.Sub(c.started) >= 100*time.Millisecond {
-		c.entry.Traffic.ObserveDownload(c.bytes, now.Sub(c.started), now)
-		c.started = time.Time{}
-		c.bytes = 0
-	}
+	c.observe(n)
 	return n, err
 }
 
 func (c *passiveTrafficConn) Close() error {
-	// Close the underlying connection before taking the sampling lock, so a
-	// concurrent blocked Read is released even during shutdown.
+	// Release a concurrent blocked Read before taking the sampling lock.
 	err := c.Conn.Close()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.closed {
-		c.closed = true
-		if c.bytes > 0 {
-			// Only time between positive reads is active; closing after a long
-			// keep-alive idle period must not dilute the measured throughput.
-			c.entry.Traffic.ObserveDownload(c.bytes, c.last.Sub(c.started), c.last)
-		}
-	}
+	c.finish()
 	return err
 }
 
 func (c *passiveTrafficConn) CloseWrite() error { return closeWriteErr(c.Conn) }
 func (c *passiveTrafficConn) CloseRead() error  { return closeReadErr(c.Conn) }
+
+type sampledResponseBody struct {
+	io.ReadCloser
+	downloadSampler
+}
+
+func newSampledResponseBody(body io.ReadCloser, onDownload func(float64)) io.ReadCloser {
+	return &sampledResponseBody{ReadCloser: body, downloadSampler: downloadSampler{
+		now:      time.Now,
+		onSample: func(bytes int64, active time.Duration, _ time.Time) { onDownload(float64(bytes) / active.Seconds()) },
+	}}
+}
+
+func (b *sampledResponseBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.observe(n)
+	return n, err
+}
+
+func (b *sampledResponseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.finish()
+	return err
+}

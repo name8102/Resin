@@ -9,6 +9,7 @@ import (
 	"net/http/httptrace"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Resinat/Resin/internal/netutil"
 	"github.com/Resinat/Resin/internal/node"
@@ -233,6 +234,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	var hasRoute bool
 	var resp *http.Response
 	var err error
+	var responseLatency time.Duration
 	var excluded []node.Hash
 	target := r.URL.Scheme + "://" + r.Host
 	direct := p.bypass != nil && p.bypass.ShouldBypass(r.Host)
@@ -282,6 +284,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			outReq.Body = egressBodyCounter
 		}
 		resp, err = transport.RoundTrip(outReq)
+		responseLatency = upstreamTrace.responseLatency()
 		if upstreamTrace.shouldCommitEgress() {
 			lifecycle.addEgressBytes(pendingEgressHeaderBytes)
 			if egressBodyCounter != nil {
@@ -319,11 +322,15 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		writeProxyError(w, proxyErr)
 		return
 	}
-	defer resp.Body.Close()
 	if hasRoute {
 		p.router.ReportTargetSuccess(route, target)
+		p.router.ReportTargetQuality(route, target, responseLatency, 0)
+		resp.Body = newSampledResponseBody(resp.Body, func(rate float64) {
+			p.router.ReportTargetQuality(route, target, 0, rate)
+		})
 	}
 
+	defer resp.Body.Close()
 	lifecycle.setHTTPStatus(resp.StatusCode)
 	lifecycle.setNetOK(true)
 

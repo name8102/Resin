@@ -21,18 +21,19 @@ import (
 
 // PlatformResponse is the API response model for a platform.
 type PlatformResponse struct {
-	ID                               string   `json:"id"`
-	Name                             string   `json:"name"`
-	StickyTTL                        string   `json:"sticky_ttl"`
-	RegexFilters                     []string `json:"regex_filters"`
-	RegionFilters                    []string `json:"region_filters"`
-	RoutableNodeCount                int      `json:"routable_node_count"`
-	ReverseProxyMissAction           string   `json:"reverse_proxy_miss_action"`
-	ReverseProxyEmptyAccountBehavior string   `json:"reverse_proxy_empty_account_behavior"`
-	ReverseProxyFixedAccountHeader   string   `json:"reverse_proxy_fixed_account_header"`
-	AllocationPolicy                 string   `json:"allocation_policy"`
-	PassiveCircuitBreakerDisabled    bool     `json:"passive_circuit_breaker_disabled"`
-	UpdatedAt                        string   `json:"updated_at"`
+	ID                               string                   `json:"id"`
+	Name                             string                   `json:"name"`
+	StickyTTL                        string                   `json:"sticky_ttl"`
+	RegexFilters                     []string                 `json:"regex_filters"`
+	RegionFilters                    []string                 `json:"region_filters"`
+	DomainRegionRules                []model.DomainRegionRule `json:"domain_region_rules"`
+	RoutableNodeCount                int                      `json:"routable_node_count"`
+	ReverseProxyMissAction           string                   `json:"reverse_proxy_miss_action"`
+	ReverseProxyEmptyAccountBehavior string                   `json:"reverse_proxy_empty_account_behavior"`
+	ReverseProxyFixedAccountHeader   string                   `json:"reverse_proxy_fixed_account_header"`
+	AllocationPolicy                 string                   `json:"allocation_policy"`
+	PassiveCircuitBreakerDisabled    bool                     `json:"passive_circuit_breaker_disabled"`
+	UpdatedAt                        string                   `json:"updated_at"`
 }
 
 func platformToResponse(p model.Platform) PlatformResponse {
@@ -44,6 +45,7 @@ func platformToResponse(p model.Platform) PlatformResponse {
 		StickyTTL:                        time.Duration(p.StickyTTLNs).String(),
 		RegexFilters:                     append([]string(nil), p.RegexFilters...),
 		RegionFilters:                    append([]string(nil), p.RegionFilters...),
+		DomainRegionRules:                model.CloneDomainRegionRules(p.DomainRegionRules),
 		RoutableNodeCount:                0,
 		ReverseProxyMissAction:           p.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: behavior,
@@ -71,6 +73,7 @@ type platformConfig struct {
 	StickyTTLNs                      int64
 	RegexFilters                     []string
 	RegionFilters                    []string
+	DomainRegionRules                []model.DomainRegionRule
 	ReverseProxyMissAction           string
 	ReverseProxyEmptyAccountBehavior string
 	ReverseProxyFixedAccountHeader   string
@@ -116,6 +119,7 @@ func platformConfigFromModel(mp model.Platform) platformConfig {
 		StickyTTLNs:                      mp.StickyTTLNs,
 		RegexFilters:                     append([]string(nil), mp.RegexFilters...),
 		RegionFilters:                    append([]string(nil), mp.RegionFilters...),
+		DomainRegionRules:                model.CloneDomainRegionRules(mp.DomainRegionRules),
 		ReverseProxyMissAction:           mp.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: normalizePlatformEmptyAccountBehavior(mp.ReverseProxyEmptyAccountBehavior),
 		ReverseProxyFixedAccountHeader:   normalizeHeaderFieldName(mp.ReverseProxyFixedAccountHeader),
@@ -131,6 +135,7 @@ func (cfg platformConfig) toModel(id string, updatedAtNs int64) model.Platform {
 		StickyTTLNs:                      cfg.StickyTTLNs,
 		RegexFilters:                     append([]string(nil), cfg.RegexFilters...),
 		RegionFilters:                    append([]string(nil), cfg.RegionFilters...),
+		DomainRegionRules:                model.CloneDomainRegionRules(cfg.DomainRegionRules),
 		ReverseProxyMissAction:           cfg.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: cfg.ReverseProxyEmptyAccountBehavior,
 		ReverseProxyFixedAccountHeader:   cfg.ReverseProxyFixedAccountHeader,
@@ -145,7 +150,7 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	return platform.NewConfiguredPlatform(
+	plat := platform.NewConfiguredPlatform(
 		id,
 		cfg.Name,
 		compiledRegexFilters,
@@ -156,7 +161,9 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 		cfg.ReverseProxyFixedAccountHeader,
 		cfg.AllocationPolicy,
 		cfg.PassiveCircuitBreakerDisabled,
-	), nil
+	)
+	plat.DomainRegionRules, err = platform.NormalizeDomainRegionRules(cfg.DomainRegionRules)
+	return plat, err
 }
 
 func validatePlatformMissAction(raw string) *ServiceError {
@@ -256,6 +263,11 @@ func setPlatformAllocationPolicy(cfg *platformConfig, policy string) *ServiceErr
 }
 
 func validatePlatformConfig(cfg *platformConfig, validateRegionFilters bool) *ServiceError {
+	rules, err := platform.NormalizeDomainRegionRules(cfg.DomainRegionRules)
+	if err != nil {
+		return invalidArg(err.Error())
+	}
+	cfg.DomainRegionRules = rules
 	if validateRegionFilters {
 		if err := platform.ValidateRegionFilters(cfg.RegionFilters); err != nil {
 			return invalidArg(err.Error())
@@ -325,15 +337,16 @@ func (s *ControlPlaneService) GetPlatform(id string) (*PlatformResponse, error) 
 
 // CreatePlatformRequest holds create platform parameters.
 type CreatePlatformRequest struct {
-	Name                             *string  `json:"name"`
-	StickyTTL                        *string  `json:"sticky_ttl"`
-	RegexFilters                     []string `json:"regex_filters"`
-	RegionFilters                    []string `json:"region_filters"`
-	ReverseProxyMissAction           *string  `json:"reverse_proxy_miss_action"`
-	ReverseProxyEmptyAccountBehavior *string  `json:"reverse_proxy_empty_account_behavior"`
-	ReverseProxyFixedAccountHeader   *string  `json:"reverse_proxy_fixed_account_header"`
-	AllocationPolicy                 *string  `json:"allocation_policy"`
-	PassiveCircuitBreakerDisabled    *bool    `json:"passive_circuit_breaker_disabled"`
+	Name                             *string                  `json:"name"`
+	StickyTTL                        *string                  `json:"sticky_ttl"`
+	RegexFilters                     []string                 `json:"regex_filters"`
+	RegionFilters                    []string                 `json:"region_filters"`
+	DomainRegionRules                []model.DomainRegionRule `json:"domain_region_rules"`
+	ReverseProxyMissAction           *string                  `json:"reverse_proxy_miss_action"`
+	ReverseProxyEmptyAccountBehavior *string                  `json:"reverse_proxy_empty_account_behavior"`
+	ReverseProxyFixedAccountHeader   *string                  `json:"reverse_proxy_fixed_account_header"`
+	AllocationPolicy                 *string                  `json:"allocation_policy"`
+	PassiveCircuitBreakerDisabled    *bool                    `json:"passive_circuit_breaker_disabled"`
 }
 
 // CreatePlatform creates a new platform.
@@ -369,6 +382,9 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 	}
 	if req.RegionFilters != nil {
 		cfg.RegionFilters = req.RegionFilters
+	}
+	if req.DomainRegionRules != nil {
+		cfg.DomainRegionRules = req.DomainRegionRules
 	}
 	if req.ReverseProxyMissAction != nil {
 		if err := setPlatformMissAction(&cfg, *req.ReverseProxyMissAction); err != nil {
@@ -466,6 +482,20 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 		return nil, err
 	} else if ok {
 		cfg.RegexFilters = filters
+	}
+
+	if raw, ok := patch["domain_region_rules"]; ok {
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return nil, invalidArg("domain_region_rules: invalid JSON")
+		}
+		var rules []model.DomainRegionRule
+		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&rules); err != nil {
+			return nil, invalidArg("domain_region_rules: " + err.Error())
+		}
+		cfg.DomainRegionRules = rules
 	}
 
 	regionFiltersPatched := false

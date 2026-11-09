@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/netip"
 	"strings"
 	"time"
@@ -34,12 +35,14 @@ type Router struct {
 	p2cWindow       func() time.Duration
 	onLeaseEvent    LeaseEventFunc
 	nodeTagResolver func(node.Hash) string
+	geoLookup       platform.GeoLookupFunc
 }
 
 type RouterConfig struct {
 	Pool        PoolAccessor
 	Authorities func() []string
 	P2CWindow   func() time.Duration
+	GeoLookup   platform.GeoLookupFunc
 	// OnLeaseEvent is called synchronously; handlers must stay lightweight.
 	OnLeaseEvent LeaseEventFunc
 	// NodeTagResolver resolves a node hash to its display tag ("<Sub>/<Tag>").
@@ -55,6 +58,7 @@ func NewRouter(cfg RouterConfig) *Router {
 		p2cWindow:       cfg.P2CWindow,
 		onLeaseEvent:    cfg.OnLeaseEvent,
 		nodeTagResolver: cfg.NodeTagResolver,
+		geoLookup:       cfg.GeoLookup,
 	}
 }
 
@@ -87,6 +91,17 @@ func (r *Router) RouteRequest(platName, account, target string, excluded ...node
 	}
 
 	destination := r.routeTarget(plat, target, excluded, selectedAt)
+	host, _, _ := net.SplitHostPort(normalizeRouteTarget(target))
+	if regions := plat.RegionsForDomain(host); len(regions) > 0 {
+		allows := destination.allows
+		destination.allows = func(h node.Hash) bool {
+			if !allows(h) {
+				return false
+			}
+			entry, ok := r.pool.GetEntry(h)
+			return ok && platform.MatchRegionFilter(entry.GetRegion(r.geoLookup), regions)
+		}
+	}
 	state := r.ensurePlatformState(plat.ID)
 	var result RouteResult
 	if account == "" {
@@ -401,7 +416,7 @@ func (r *Router) selectLiveRandomRoute(
 ) (node.Hash, *node.NodeEntry, error) {
 	var lastMissing node.Hash
 	for i := 0; i < livePickAttempts; i++ {
-		h, err := randomRoute(plat, stats, r.pool, target.domain, r.authorities(), r.p2cWindow(), target.allows, target.evidence)
+		h, err := randomRoute(plat, stats, r.pool, target.domain, r.authorities(), r.p2cWindow(), target.allows, target.evidence, target.exploration)
 		if err != nil {
 			return node.Zero, nil, err
 		}

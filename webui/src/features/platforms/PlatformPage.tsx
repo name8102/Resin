@@ -1,3 +1,4 @@
+import { DomainRegionRulesField } from "./DomainRegionRulesField";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Info, Plus, RefreshCw, Search, Sparkles, X } from "lucide-react";
@@ -370,6 +371,8 @@ export function PlatformPage() {
                   {t("支持反选：以 ! 开头可排除地区（如 !hk）。可与正选混用，最终结果为“先正选再排除”。")}
                 </p>
               </div>
+
+              <DomainRegionRulesField id="create-domain-regions" form={createForm} />
 
               <div className="detail-actions">
                 <Button type="submit" disabled={createMutation.isPending}>

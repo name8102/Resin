@@ -180,7 +180,7 @@ func TestTargetSuccess_PrefersBestThreeButCanExploreFourth(t *testing.T) {
 	for _, h := range hashes {
 		reportSelectedSuccess(t, r, p, h, "api.github.com:443")
 	}
-	// The slowest node has two recent responses; all faster nodes have only one.
+	// Another success must not promote the slowest node above faster real responses.
 	reportSelectedSuccess(t, r, p, hashes[3], "api.github.com:443")
 	primary := 0
 	for i := 0; i < 2048; i++ {
@@ -192,8 +192,8 @@ func TestTargetSuccess_PrefersBestThreeButCanExploreFourth(t *testing.T) {
 			primary++
 		}
 	}
-	if primary < 1840 || primary == 2048 {
-		t.Fatalf("stable primary/trial balance: %d/2048", primary)
+	if primary == 0 || primary > 128 {
+		t.Fatalf("second slow success displaced faster shortlist: %d/2048", primary)
 	}
 	for _, h := range hashes[:3] {
 		reportSelectedSuccess(t, r, p, h, "api.github.com:443")
@@ -259,7 +259,7 @@ func TestTargetSuccess_OldConnectionCannotClearNewFailure(t *testing.T) {
 	r.ReportTargetFailure(route, "api.github.com:443")
 	r.ReportTargetSuccess(route, "api.github.com:443")
 	key := targetHealthKey{p.ID, h, "api.github.com:443"}
-	if got := r.targetHealth.evidence(key, time.Now(), r.p2cWindow()); !got.cooling || !got.failed || got.successes != 0 {
+	if got := r.targetHealth.evidence(key, time.Now(), r.p2cWindow()); !got.cooling || !got.failed || got.reliability != 0 {
 		t.Fatalf("old connection overrode failure: %+v", got)
 	}
 	// Stale responses remain stale even after the cooldown, and a route picked
@@ -267,7 +267,7 @@ func TestTargetSuccess_OldConnectionCannotClearNewFailure(t *testing.T) {
 	now := time.Now()
 	r.targetHealth.success(key, route.selectedAt, now.Add(targetFailureCooldown+time.Second), r.p2cWindow())
 	r.targetHealth.success(key, now, now, r.p2cWindow())
-	if got := r.targetHealth.evidence(key, now.Add(targetFailureCooldown+time.Second), r.p2cWindow()); got.cooling || !got.failed || got.successes != 0 {
+	if got := r.targetHealth.evidence(key, now.Add(targetFailureCooldown+time.Second), r.p2cWindow()); got.cooling || !got.failed || got.reliability != 0 {
 		t.Fatalf("stale or cooling success rehabilitated failure: %+v", got)
 	}
 }
@@ -304,13 +304,13 @@ func TestTargetHealth_BackoffRetentionAndSuccessWindow(t *testing.T) {
 	now = health.until.Add(time.Second)
 	cache.success(key, now, now, window)
 	cache.success(key, now.Add(time.Minute), now.Add(time.Minute), window)
-	if got := cache.evidence(key, now.Add(time.Minute), window); got.successes != 2 || got.failed {
-		t.Fatalf("recent successes not stable: %+v", got)
+	if got := cache.evidence(key, now.Add(time.Minute), window); got.reliability <= 0 || got.reliability >= 1 || got.failed {
+		t.Fatalf("recovery lost success evidence or erased recent failures: %+v", got)
 	}
-	if got := cache.evidence(key, now.Add(window+30*time.Second), window); got.successes != 1 {
-		t.Fatalf("old first success counted as recent: %+v", got)
+	if got := cache.evidence(key, now.Add(window+30*time.Second), window); got.reliability <= 0 || got.reliability >= 0.5 {
+		t.Fatalf("success confidence did not decay: %+v", got)
 	}
-	if got := cache.evidence(key, now.Add(window+2*time.Minute), window); got.successes != 0 || got.failed {
+	if got := cache.evidence(key, now.Add(window+2*time.Minute), window); got.reliability != 0 || got.failed {
 		t.Fatalf("success expiry: %+v", got)
 	}
 	cache.failure(key, now.Add(window+3*time.Minute), window)
@@ -332,7 +332,7 @@ func TestTargetHealth_SuccessEntriesShareBoundedCache(t *testing.T) {
 	if len(cache.entries) != maxTargetHealthEntries || cache.order.Len() != maxTargetHealthEntries {
 		t.Fatal("success entries bypassed bounded cache")
 	}
-	if cache.evidence(targetHealthKey{target: "0.example.com:443"}, now, time.Minute).successes != 0 {
+	if cache.evidence(targetHealthKey{target: "0.example.com:443"}, now, time.Minute).reliability != 0 {
 		t.Fatal("oldest success was not evicted")
 	}
 	expired := now.Add(2 * time.Minute)

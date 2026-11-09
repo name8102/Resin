@@ -83,16 +83,16 @@ func TestRestoreTargetHistoryRespectsFailureOrderingAndStaleness(t *testing.T) {
 	}
 	r.RestoreTargetHistory(records)
 	got := r.routeTarget(p, "api.example:443", nil, now).evidence(h)
-	if !got.cooling || got.successes != 0 || got.proven != 0 {
+	if !got.cooling || got.reliability != 0 || got.proven != 0 {
 		t.Fatalf("late old connection erased newer failure: %+v", got)
 	}
-	if got := r.routeTarget(p, "expired.example:443", nil, now).evidence(h); got.successes != 0 {
+	if got := r.routeTarget(p, "expired.example:443", nil, now).evidence(h); got.reliability != 0 {
 		t.Fatalf("restored stale evidence: %+v", got)
 	}
 	// An unrelated fresh node's historical response also primes new origins.
 	r2, _, p2, h2 := targetTestRouter(t)
 	r2.RestoreTargetHistory([]TargetObservation{{PlatformID: p2.ID, NodeHash: h2, SelectedAt: now.Add(-time.Minute), ObservedAt: now.Add(-30 * time.Second), Target: "working.example:443", Success: true}})
-	if got := r2.routeTarget(p2, "unvisited.example:443", nil, now).evidence(h2); got.proven != 1 {
+	if got := r2.routeTarget(p2, "unvisited.example:443", nil, now).evidence(h2); got.proven <= 0 {
 		t.Fatalf("startup discarded real traffic evidence: %+v", got)
 	}
 }
