@@ -28,16 +28,31 @@ export function parseHeaderLines(input: string | undefined): string[] {
 }
 
 
-// Domain rules use one suffix and comma-separated region filters per line.
+// Bare domains include subdomains; patterns also accept glob stars.
 export function parseDomainRegionRules(input: string | undefined): DomainRegionRule[] {
   const seen = new Set<string>();
   return parseLinesToList(input).map((line) => {
     const parts = line.split("=");
     const rawDomain = parts[0]?.trim().toLowerCase().replace(/\.$/, "") ?? "";
-    if (parts.length !== 2 || !rawDomain || /[\s/:@*?#]/.test(rawDomain)) {
+    if (parts.length !== 2 || !rawDomain || /[\s/:@?#]/.test(rawDomain)) {
       throw new Error("域名地区规则格式：域名 = 地区代码，如 chatgpt.com = us,jp");
     }
-    const domain = new URL(`http://${rawDomain}`).hostname;
+    const domain = rawDomain.split(".").map((label) => {
+      if (label.includes("*")) {
+        if (label.length > 63 || !/^[a-z0-9*](?:[a-z0-9*-]*[a-z0-9*])?$/.test(label)) {
+          throw new Error("通配域名标签只能包含 ASCII 字母、数字、连字符和 *");
+        }
+        return label;
+      }
+      const ascii = new URL(`http://${label}.invalid`).hostname.slice(0, -8);
+      if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(ascii) || ascii.length > 63) {
+        throw new Error("域名标签格式无效");
+      }
+      return ascii;
+    }).join(".");
+    if (domain.length > 253 || /^\d+\.\d+\.\d+\.\d+$/.test(domain)) {
+      throw new Error("须填写 DNS 域名，不支持 IP 地址");
+    }
     if (seen.has(domain)) {
       throw new Error("域名地区规则不能包含重复域名");
     }

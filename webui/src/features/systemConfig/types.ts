@@ -1,3 +1,5 @@
+import type { DomainRegionRule } from "../platforms/types";
+
 export type RuntimeConfig = {
   request_log_enabled: boolean;
   reverse_proxy_log_detail_enabled: boolean;
@@ -29,6 +31,7 @@ export type EnvConfig = {
   default_platform_sticky_ttl: string;
   default_platform_regex_filters: string[] | null;
   default_platform_region_filters: string[] | null;
+  default_platform_domain_region_rules: DomainRegionRule[];
   default_platform_reverse_proxy_miss_action: string;
   default_platform_reverse_proxy_empty_account_behavior: string;
   default_platform_reverse_proxy_fixed_account_header: string;

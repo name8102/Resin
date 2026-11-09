@@ -20,7 +20,7 @@ type Platform struct {
 }
 
 // DomainRegionRule restricts a domain and its subdomains to these exit regions.
-// The longest matching domain wins; platform-wide filters still apply.
+// The most specific matching pattern wins; platform-wide filters still apply.
 type DomainRegionRule struct {
 	Domain  string   `json:"domain"`
 	Regions []string `json:"regions"`

@@ -102,6 +102,7 @@ func (s *ControlPlaneService) defaultPlatformConfig(name string) platformConfig 
 		StickyTTLNs:            int64(s.EnvCfg.DefaultPlatformStickyTTL),
 		RegexFilters:           append([]string(nil), s.EnvCfg.DefaultPlatformRegexFilters...),
 		RegionFilters:          append([]string(nil), s.EnvCfg.DefaultPlatformRegionFilters...),
+		DomainRegionRules:      model.CloneDomainRegionRules(s.EnvCfg.DefaultPlatformDomainRegionRules),
 		ReverseProxyMissAction: s.EnvCfg.DefaultPlatformReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: normalizePlatformEmptyAccountBehavior(
 			s.EnvCfg.DefaultPlatformReverseProxyEmptyAccountBehavior,

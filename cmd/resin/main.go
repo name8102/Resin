@@ -435,6 +435,7 @@ func ensureDefaultPlatform(
 		StickyTTLNs:                      int64(envCfg.DefaultPlatformStickyTTL),
 		RegexFilters:                     append([]string(nil), envCfg.DefaultPlatformRegexFilters...),
 		RegionFilters:                    append([]string(nil), envCfg.DefaultPlatformRegionFilters...),
+		DomainRegionRules:                model.CloneDomainRegionRules(envCfg.DefaultPlatformDomainRegionRules),
 		ReverseProxyMissAction:           envCfg.DefaultPlatformReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: envCfg.DefaultPlatformReverseProxyEmptyAccountBehavior,
 		ReverseProxyFixedAccountHeader:   envCfg.DefaultPlatformReverseProxyFixedAccountHeader,

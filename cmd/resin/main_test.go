@@ -145,6 +145,7 @@ func TestBootstrapTopology_CreatesDefaultPlatformWhenMissing(t *testing.T) {
 	envCfg.DefaultPlatformStickyTTL = 2 * time.Hour
 	envCfg.DefaultPlatformRegexFilters = []string{`^Provider/.*`}
 	envCfg.DefaultPlatformRegionFilters = []string{"us", "hk"}
+	envCfg.DefaultPlatformDomainRegionRules = []model.DomainRegionRule{{Domain: "*.example.com", Regions: []string{"!jp", "!kr"}}}
 	envCfg.DefaultPlatformReverseProxyMissAction = "REJECT"
 	envCfg.DefaultPlatformReverseProxyEmptyAccountBehavior = "FIXED_HEADER"
 	envCfg.DefaultPlatformReverseProxyFixedAccountHeader = "X-Account-Id"
@@ -204,6 +205,9 @@ func TestBootstrapTopology_CreatesDefaultPlatformWhenMissing(t *testing.T) {
 		t.Fatalf("region_filters: got %v", defaultPlat.RegionFilters)
 	}
 
+	if !reflect.DeepEqual(defaultPlat.DomainRegionRules, envCfg.DefaultPlatformDomainRegionRules) {
+		t.Fatalf("domain_region_rules: %+v", defaultPlat.DomainRegionRules)
+	}
 	if _, ok := pool.GetPlatform(platform.DefaultPlatformID); !ok {
 		t.Fatal("default platform should be registered in pool by ID")
 	}

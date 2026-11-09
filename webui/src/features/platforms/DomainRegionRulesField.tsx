@@ -19,7 +19,7 @@ export function DomainRegionRulesField({ id, form }: { id: string; form: UseForm
         {...form.register("domain_region_rules_text")}
       />
       <p id={`${id}-hint`} className="muted" style={{ marginTop: 4, fontSize: 12 }}>
-        {t("包含子域名，最具体的域名优先；与平台地区过滤取交集。没有符合地区的节点时请求失败。")}
+        {t("普通域名包含子域名，支持 * 通配；如 *.example.com = !jp,!kr。最具体的规则优先，与平台地区过滤取交集；无匹配节点时请求失败。")}
       </p>
       {error ? <p id={`${id}-error`} className="field-error" role="alert">{t(error)}</p> : null}
     </div>

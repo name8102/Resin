@@ -602,3 +602,22 @@ func assertContains(t *testing.T, s, substr string) {
 		t.Errorf("expected %q to contain %q", s, substr)
 	}
 }
+
+func TestLoadEnvConfig_DefaultPlatformDomainRegionRules(t *testing.T) {
+	setEnvs(t, requiredEnvs())
+	t.Setenv("RESIN_DEFAULT_PLATFORM_REGION_FILTERS", `["!cn"]`)
+	t.Setenv("RESIN_DEFAULT_PLATFORM_DOMAIN_REGION_RULES", `[{"domain":"DLSITE.COM.","regions":["jp"]},{"domain":"*.example.com","regions":["!jp","!kr"]}]`)
+	cfg, err := LoadEnvConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DefaultPlatformDomainRegionRules) != 2 || cfg.DefaultPlatformDomainRegionRules[0].Domain != "dlsite.com" || cfg.DefaultPlatformDomainRegionRules[1].Regions[1] != "!kr" {
+		t.Fatalf("rules: %+v", cfg.DefaultPlatformDomainRegionRules)
+	}
+	for _, raw := range []string{`{}`, `[{"domain":"example.com","regions":[]}]`, `[{"domain":"api?.example.com","regions":["jp"]}]`} {
+		t.Setenv("RESIN_DEFAULT_PLATFORM_DOMAIN_REGION_RULES", raw)
+		if _, err := LoadEnvConfig(); err == nil {
+			t.Fatalf("accepted %s", raw)
+		}
+	}
+}

@@ -104,11 +104,16 @@ Platforms accept `domain_region_rules` on creation and PATCH:
 }
 ```
 
-A domain includes itself and its subdomains, with DNS label boundaries. The
-longest matching domain wins, independent of array order. Domains normalize to
-lowercase ASCII/IDNA and ignore a final dot. URLs, ports, IP literals, wildcards,
-empty region lists and duplicate normalized domains are rejected. Regions use
-the same lowercase two-letter include/exclude syntax as platform filters.
+A bare domain includes itself and all subdomains, with DNS label boundaries.
+Patterns support `*` anywhere in ASCII labels; a star matches zero or more
+characters, including dots. `*.example.com` matches nested subdomains but not
+`example.com`. The rule with the most non-star characters wins; ties prefer
+fewer stars, then configured order. Bare domains retain their subdomain behavior
+when competing with a glob. Literal labels normalize to lowercase ASCII/IDNA;
+a final dot is ignored. URLs, ports, IP literals, `?`, empty region lists and
+duplicate normalized patterns are rejected. Regions use lowercase two-letter
+codes: `jp` includes Japan, `!jp,!kr` excludes Japan and South Korea. Any nonempty
+region filter also excludes unknown exit regions.
 
 Rules intersect the platform's existing routable view. Exit probe metadata takes
 precedence over GeoIP of the exit IP; unknown regions do not satisfy a rule.
@@ -122,9 +127,25 @@ In platform creation/editing, enter one rule per line:
 ```text
 chatgpt.com = us,jp
 api.chatgpt.com = us
-example.com = !cn
+*.example.com = !jp,!kr
 ```
 
 PATCH `{"domain_region_rules": []}` clears all rules. Rules persist in state.db
 and are restored on restart. Existing platforms start with no domain rules;
 subscription selection and account-identity rules remain unchanged.
+
+`RESIN_DEFAULT_PLATFORM_DOMAIN_REGION_RULES` accepts the same rules as a JSON
+array. Together with `RESIN_DEFAULT_PLATFORM_REGION_FILTERS`, it seeds a new
+built-in Default platform and supplies create/reset defaults. Existing persisted
+platforms are not overwritten on startup; apply a partial PATCH to update them.
+For example, a platform-wide `["!cn"]` excludes China and unknown regions, while
+these domain rules further restrict the requested sites (including subdomains):
+
+```json
+[
+  {"domain":"dlsite.com","regions":["jp"]},
+  {"domain":"e-hentai.org","regions":["!jp","!kr"]},
+  {"domain":"exhentai.org","regions":["!jp","!kr"]},
+  {"domain":"esjzone.cc","regions":["!jp","!kr"]}
+]
+```

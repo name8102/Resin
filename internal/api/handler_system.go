@@ -5,52 +5,54 @@ import (
 	"sync/atomic"
 
 	"github.com/Resinat/Resin/internal/config"
+	"github.com/Resinat/Resin/internal/model"
 	"github.com/Resinat/Resin/internal/service"
 )
 
 type systemEnvConfigResponse struct {
-	CacheDir                                        string          `json:"cache_dir"`
-	StateDir                                        string          `json:"state_dir"`
-	LogDir                                          string          `json:"log_dir"`
-	ListenAddress                                   string          `json:"listen_address"`
-	ResinPort                                       int             `json:"resin_port"`
-	APIMaxBodyBytes                                 int             `json:"api_max_body_bytes"`
-	MaxLatencyTableEntries                          int             `json:"max_latency_table_entries"`
-	ProbeConcurrency                                int             `json:"probe_concurrency"`
-	GeoIPUpdateSchedule                             string          `json:"geoip_update_schedule"`
-	DefaultPlatformStickyTTL                        config.Duration `json:"default_platform_sticky_ttl"`
-	DefaultPlatformRegexFilters                     []string        `json:"default_platform_regex_filters"`
-	DefaultPlatformRegionFilters                    []string        `json:"default_platform_region_filters"`
-	DefaultPlatformReverseProxyMissAction           string          `json:"default_platform_reverse_proxy_miss_action"`
-	DefaultPlatformReverseProxyEmptyAccountBehavior string          `json:"default_platform_reverse_proxy_empty_account_behavior"`
-	DefaultPlatformReverseProxyFixedAccountHeader   string          `json:"default_platform_reverse_proxy_fixed_account_header"`
-	DefaultPlatformAllocationPolicy                 string          `json:"default_platform_allocation_policy"`
-	ProbeTimeout                                    config.Duration `json:"probe_timeout"`
-	ResourceFetchTimeout                            config.Duration `json:"resource_fetch_timeout"`
-	NodeDNSUpstreams                                []string        `json:"node_dns_upstreams"`
-	ProxyTransportMaxIdleConns                      int             `json:"proxy_transport_max_idle_conns"`
-	ProxyTransportMaxIdleConnsPerHost               int             `json:"proxy_transport_max_idle_conns_per_host"`
-	ProxyTransportIdleConnTimeout                   config.Duration `json:"proxy_transport_idle_conn_timeout"`
-	ProxyBypassRules                                []string        `json:"proxy_bypass_rules"`
-	RequestLogQueueSize                             int             `json:"request_log_queue_size"`
-	RequestLogQueueFlushBatchSize                   int             `json:"request_log_queue_flush_batch_size"`
-	RequestLogQueueFlushInterval                    config.Duration `json:"request_log_queue_flush_interval"`
-	RequestLogDBMaxMB                               int             `json:"request_log_db_max_mb"`
-	RequestLogDBRetainCount                         int             `json:"request_log_db_retain_count"`
-	MetricThroughputIntervalSeconds                 int             `json:"metric_throughput_interval_seconds"`
-	MetricThroughputRetentionSeconds                int             `json:"metric_throughput_retention_seconds"`
-	MetricBucketSeconds                             int             `json:"metric_bucket_seconds"`
-	MetricConnectionsIntervalSeconds                int             `json:"metric_connections_interval_seconds"`
-	MetricConnectionsRetentionSeconds               int             `json:"metric_connections_retention_seconds"`
-	MetricLeasesIntervalSeconds                     int             `json:"metric_leases_interval_seconds"`
-	MetricLeasesRetentionSeconds                    int             `json:"metric_leases_retention_seconds"`
-	MetricLatencyBinWidthMS                         int             `json:"metric_latency_bin_width_ms"`
-	MetricLatencyBinOverflowMS                      int             `json:"metric_latency_bin_overflow_ms"`
-	AdminTokenSet                                   bool            `json:"admin_token_set"`
-	ProxyTokenSet                                   bool            `json:"proxy_token_set"`
-	AdminTokenWeak                                  bool            `json:"admin_token_weak"`
-	ProxyTokenWeak                                  bool            `json:"proxy_token_weak"`
-	AuthVersion                                     string          `json:"auth_version"`
+	CacheDir                                        string                   `json:"cache_dir"`
+	StateDir                                        string                   `json:"state_dir"`
+	LogDir                                          string                   `json:"log_dir"`
+	ListenAddress                                   string                   `json:"listen_address"`
+	ResinPort                                       int                      `json:"resin_port"`
+	APIMaxBodyBytes                                 int                      `json:"api_max_body_bytes"`
+	MaxLatencyTableEntries                          int                      `json:"max_latency_table_entries"`
+	ProbeConcurrency                                int                      `json:"probe_concurrency"`
+	GeoIPUpdateSchedule                             string                   `json:"geoip_update_schedule"`
+	DefaultPlatformStickyTTL                        config.Duration          `json:"default_platform_sticky_ttl"`
+	DefaultPlatformRegexFilters                     []string                 `json:"default_platform_regex_filters"`
+	DefaultPlatformRegionFilters                    []string                 `json:"default_platform_region_filters"`
+	DefaultPlatformDomainRegionRules                []model.DomainRegionRule `json:"default_platform_domain_region_rules"`
+	DefaultPlatformReverseProxyMissAction           string                   `json:"default_platform_reverse_proxy_miss_action"`
+	DefaultPlatformReverseProxyEmptyAccountBehavior string                   `json:"default_platform_reverse_proxy_empty_account_behavior"`
+	DefaultPlatformReverseProxyFixedAccountHeader   string                   `json:"default_platform_reverse_proxy_fixed_account_header"`
+	DefaultPlatformAllocationPolicy                 string                   `json:"default_platform_allocation_policy"`
+	ProbeTimeout                                    config.Duration          `json:"probe_timeout"`
+	ResourceFetchTimeout                            config.Duration          `json:"resource_fetch_timeout"`
+	NodeDNSUpstreams                                []string                 `json:"node_dns_upstreams"`
+	ProxyTransportMaxIdleConns                      int                      `json:"proxy_transport_max_idle_conns"`
+	ProxyTransportMaxIdleConnsPerHost               int                      `json:"proxy_transport_max_idle_conns_per_host"`
+	ProxyTransportIdleConnTimeout                   config.Duration          `json:"proxy_transport_idle_conn_timeout"`
+	ProxyBypassRules                                []string                 `json:"proxy_bypass_rules"`
+	RequestLogQueueSize                             int                      `json:"request_log_queue_size"`
+	RequestLogQueueFlushBatchSize                   int                      `json:"request_log_queue_flush_batch_size"`
+	RequestLogQueueFlushInterval                    config.Duration          `json:"request_log_queue_flush_interval"`
+	RequestLogDBMaxMB                               int                      `json:"request_log_db_max_mb"`
+	RequestLogDBRetainCount                         int                      `json:"request_log_db_retain_count"`
+	MetricThroughputIntervalSeconds                 int                      `json:"metric_throughput_interval_seconds"`
+	MetricThroughputRetentionSeconds                int                      `json:"metric_throughput_retention_seconds"`
+	MetricBucketSeconds                             int                      `json:"metric_bucket_seconds"`
+	MetricConnectionsIntervalSeconds                int                      `json:"metric_connections_interval_seconds"`
+	MetricConnectionsRetentionSeconds               int                      `json:"metric_connections_retention_seconds"`
+	MetricLeasesIntervalSeconds                     int                      `json:"metric_leases_interval_seconds"`
+	MetricLeasesRetentionSeconds                    int                      `json:"metric_leases_retention_seconds"`
+	MetricLatencyBinWidthMS                         int                      `json:"metric_latency_bin_width_ms"`
+	MetricLatencyBinOverflowMS                      int                      `json:"metric_latency_bin_overflow_ms"`
+	AdminTokenSet                                   bool                     `json:"admin_token_set"`
+	ProxyTokenSet                                   bool                     `json:"proxy_token_set"`
+	AdminTokenWeak                                  bool                     `json:"admin_token_weak"`
+	ProxyTokenWeak                                  bool                     `json:"proxy_token_weak"`
+	AuthVersion                                     string                   `json:"auth_version"`
 }
 
 // HandleSystemInfo returns a handler for GET /api/v1/system/info.
@@ -120,6 +122,7 @@ func systemEnvConfigSnapshot(envCfg *config.EnvConfig) *systemEnvConfigResponse 
 		DefaultPlatformStickyTTL:              config.Duration(envCfg.DefaultPlatformStickyTTL),
 		DefaultPlatformRegexFilters:           append([]string(nil), envCfg.DefaultPlatformRegexFilters...),
 		DefaultPlatformRegionFilters:          append([]string(nil), envCfg.DefaultPlatformRegionFilters...),
+		DefaultPlatformDomainRegionRules:      model.CloneDomainRegionRules(envCfg.DefaultPlatformDomainRegionRules),
 		DefaultPlatformReverseProxyMissAction: envCfg.DefaultPlatformReverseProxyMissAction,
 		DefaultPlatformReverseProxyEmptyAccountBehavior: envCfg.DefaultPlatformReverseProxyEmptyAccountBehavior,
 		DefaultPlatformReverseProxyFixedAccountHeader:   envCfg.DefaultPlatformReverseProxyFixedAccountHeader,

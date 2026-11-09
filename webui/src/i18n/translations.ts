@@ -6,7 +6,11 @@ const APP_TITLE_EN = "Resin · Sticky Proxy Pool";
 const EXACT_ZH_TO_EN: Record<string, string> = {
   "域名地区规则": "Domain Region Rules",
   "每行一条，如 chatgpt.com = us,jp": "One rule per line, e.g. chatgpt.com = us,jp",
-  "包含子域名，最具体的域名优先；与平台地区过滤取交集。没有符合地区的节点时请求失败。": "Includes subdomains; the most specific domain wins. Intersects platform region filters. Requests fail when no node matches the required regions.",
+  "普通域名包含子域名，支持 * 通配；如 *.example.com = !jp,!kr。最具体的规则优先，与平台地区过滤取交集；无匹配节点时请求失败。": "Bare domains include subdomains; * wildcards are supported, e.g. *.example.com = !jp,!kr. The most specific rule wins and intersects platform region filters; requests fail if no node matches.",
+  "默认域名地区规则": "Default domain region rules",
+  "通配域名标签只能包含 ASCII 字母、数字、连字符和 *": "Wildcard labels may contain only ASCII letters, digits, hyphens and *",
+  "域名标签格式无效": "Invalid DNS label",
+  "须填写 DNS 域名，不支持 IP 地址": "Enter a DNS domain, not an IP address",
   "域名地区规则格式：域名 = 地区代码，如 chatgpt.com = us,jp": "Format: domain = region codes, e.g. chatgpt.com = us,jp",
   "域名地区规则不能包含重复域名": "Domain region rules must not contain duplicate domains",
   "地区代码须为两个字母，可用 ! 排除地区": "Use two-letter region codes; prefix ! to exclude a region",

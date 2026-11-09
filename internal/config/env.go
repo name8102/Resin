@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Resinat/Resin/internal/model"
 	"github.com/Resinat/Resin/internal/platform"
 	"github.com/robfig/cron/v3"
 )
@@ -34,6 +35,7 @@ type EnvConfig struct {
 	DefaultPlatformStickyTTL                        time.Duration
 	DefaultPlatformRegexFilters                     []string
 	DefaultPlatformRegionFilters                    []string
+	DefaultPlatformDomainRegionRules                []model.DomainRegionRule
 	DefaultPlatformReverseProxyMissAction           string
 	DefaultPlatformReverseProxyEmptyAccountBehavior string
 	DefaultPlatformReverseProxyFixedAccountHeader   string
@@ -103,6 +105,12 @@ func LoadEnvConfig() (*EnvConfig, error) {
 	cfg.DefaultPlatformStickyTTL = envDuration("RESIN_DEFAULT_PLATFORM_STICKY_TTL", 7*24*time.Hour, &errs)
 	cfg.DefaultPlatformRegexFilters = envStringSlice("RESIN_DEFAULT_PLATFORM_REGEX_FILTERS", []string{}, &errs)
 	cfg.DefaultPlatformRegionFilters = envStringSlice("RESIN_DEFAULT_PLATFORM_REGION_FILTERS", []string{}, &errs)
+	if raw := os.Getenv("RESIN_DEFAULT_PLATFORM_DOMAIN_REGION_RULES"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &cfg.DefaultPlatformDomainRegionRules); err != nil {
+			errs = append(errs, fmt.Sprintf("RESIN_DEFAULT_PLATFORM_DOMAIN_REGION_RULES: %v", err))
+		}
+	}
+
 	cfg.DefaultPlatformReverseProxyMissAction = envStr(
 		"RESIN_DEFAULT_PLATFORM_REVERSE_PROXY_MISS_ACTION",
 		string(platform.ReverseProxyMissActionTreatAsEmpty),
@@ -209,6 +217,11 @@ func LoadEnvConfig() (*EnvConfig, error) {
 	}
 	if err := platform.ValidateRegionFilters(cfg.DefaultPlatformRegionFilters); err != nil {
 		errs = append(errs, fmt.Sprintf("RESIN_DEFAULT_PLATFORM_REGION_FILTERS: %v", err))
+	}
+	if rules, err := platform.NormalizeDomainRegionRules(cfg.DefaultPlatformDomainRegionRules); err != nil {
+		errs = append(errs, fmt.Sprintf("RESIN_DEFAULT_PLATFORM_DOMAIN_REGION_RULES: %v", err))
+	} else {
+		cfg.DefaultPlatformDomainRegionRules = rules
 	}
 	normalizedMissAction := platform.NormalizeReverseProxyMissAction(cfg.DefaultPlatformReverseProxyMissAction)
 	if normalizedMissAction == "" {

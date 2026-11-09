@@ -833,6 +833,10 @@ export function SystemConfigPage() {
                       <label className="field-label" style={{ margin: 0 }}>{t("默认地区黑名单")}</label>
                       <Textarea readOnly disabled rows={2} value={envBaseline.default_platform_region_filters?.join(",") || t("无")} />
                     </div>
+                    <div className="field-group field-span-2">
+                      <label className="field-label" style={{ margin: 0 }}>{t("默认域名地区规则")}</label>
+                      <Textarea readOnly disabled rows={4} value={envBaseline.default_platform_domain_region_rules?.map((rule) => `${rule.domain} = ${rule.regions.join(",")}`).join("\n") || t("无")} />
+                    </div>
                   </div>
                 </section>
 
