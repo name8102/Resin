@@ -18,6 +18,7 @@ const (
 	targetFailureCooldown    = 5 * time.Minute
 	maxTargetFailureCooldown = 30 * time.Minute
 	targetFailureRetention   = 30 * time.Minute
+	targetDownloadPenalty    = 2 * time.Minute
 	maxTargetHealthEntries   = 8192
 	knownNodeWindow          = 30 * time.Minute
 )
@@ -29,25 +30,27 @@ type targetHealthKey struct {
 }
 
 type targetHealth struct {
-	key               targetHealthKey
-	lastFailure       time.Time
-	until             time.Time
-	failures          int
-	success           time.Time
-	responses         targetResponseEvidence
-	latency           targetQualitySample
-	speed             targetQualitySample
-	explorationAt     time.Time
-	explorationCredit int
+	key                targetHealthKey
+	lastFailure        time.Time
+	until              time.Time
+	failures           int
+	success            time.Time
+	responses          targetResponseEvidence
+	latency            targetQualitySample
+	speed              targetQualitySample
+	downloadImpairedAt time.Time
+	explorationAt      time.Time
+	explorationCredit  int
 }
 
 type targetEvidence struct {
-	reliability float64
-	proven      float64 // fresh real responses on this platform, across exact origins
-	latency     time.Duration
-	speed       float64
-	failed      bool
-	cooling     bool
+	reliability      float64
+	proven           float64 // fresh real responses on this platform, across exact origins
+	latency          time.Duration
+	speed            float64
+	failed           bool
+	cooling          bool
+	downloadImpaired bool
 }
 
 // Exact-origin health is bounded and independent of global probe health.
@@ -68,7 +71,7 @@ func (c *targetHealthCache) get(key targetHealthKey, now time.Time, window time.
 	successExpired := health.success.IsZero() || !isRecent(health.success, now, window)
 	qualityExpired := health.latency.freshness(now, window) == 0 && health.speed.freshness(now, passiveSpeedWindow) == 0
 	explorationExpired := health.explorationAt.IsZero() || !isRecent(health.explorationAt, now, knownNodeWindow)
-	if failureExpired && successExpired && qualityExpired && explorationExpired {
+	if failureExpired && successExpired && qualityExpired && explorationExpired && !health.downloadImpaired(now) {
 		delete(c.entries, key)
 		c.order.Remove(e)
 		return targetHealth{key: key}
@@ -130,13 +133,41 @@ func (c *targetHealthCache) evidence(key targetHealthKey, now time.Time, window 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	health := c.get(key, now, window)
-	evidence := targetEvidence{failed: !health.lastFailure.IsZero() && health.success.IsZero(), cooling: now.Before(health.until)}
+	evidence := targetEvidence{
+		failed: !health.lastFailure.IsZero() && health.success.IsZero(), cooling: now.Before(health.until),
+		downloadImpaired: health.downloadImpaired(now),
+	}
 	if !health.success.IsZero() && isRecent(health.success, now, window) {
 		evidence.reliability = evidenceFreshness(health.success, now, window) * health.responses.reliability(now, window)
 	}
 	evidence.latency = time.Duration(health.latency.estimate(now, window, float64(defaultResponseLatency)))
 	evidence.speed = health.speed.estimate(now, passiveSpeedWindow, defaultDownloadSpeed)
 	return evidence
+}
+
+func (h targetHealth) downloadImpaired(now time.Time) bool {
+	return now.Before(h.downloadImpairedAt.Add(targetDownloadPenalty))
+}
+
+// ReportTargetDownloadImpairment de-prioritizes a route for new allocations,
+// without excluding it or revoking any lease. Old tunnels cannot extend it.
+func (r *Router) ReportTargetDownloadImpairment(route RouteResult, target string) {
+	plat, ok := r.pool.GetPlatform(route.PlatformID)
+	if !ok || plat.PassiveCircuitBreakerDisabled {
+		return
+	}
+	key := targetHealthKey{route.PlatformID, route.NodeHash, normalizeRouteTarget(target)}
+	c := &r.targetHealth
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	health := c.get(key, now, r.p2cWindow())
+	if route.selectedAt.IsZero() || !route.selectedAt.After(health.lastFailure) ||
+		!route.selectedAt.After(health.downloadImpairedAt) || health.downloadImpaired(now) {
+		return
+	}
+	health.downloadImpairedAt = now
+	c.put(health)
 }
 
 // ReportTargetFailure excludes an exact origin with exponential cooldown.
@@ -178,7 +209,7 @@ func (r *Router) routeTarget(plat *platform.Platform, target string, excluded []
 		result := r.targetHealth.evidence(targetHealthKey{plat.ID, h, address}, now, window)
 		result.proven = r.targetHealth.evidence(targetHealthKey{plat.ID, h, ""}, now, knownNodeWindow).reliability
 		if plat.PassiveCircuitBreakerDisabled {
-			result.failed, result.cooling = false, false
+			result.failed, result.cooling, result.downloadImpaired = false, false, false
 		}
 		return result
 	}

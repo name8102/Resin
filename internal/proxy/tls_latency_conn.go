@@ -18,6 +18,7 @@ type tlsLatencyConn struct {
 	reported                   atomic.Bool
 	dialElapsed                time.Duration
 	onLatency                  func(time.Duration)
+	download                   *tunnelDownloadProgress
 	handshakeTimeout           time.Duration
 	mu                         sync.Mutex
 	clientPrefix, serverPrefix [6]byte
@@ -109,6 +110,9 @@ func (c *tlsLatencyConn) reportLatency() {
 }
 
 func (c *tlsLatencyConn) Write(p []byte) (int, error) {
+	if c.download != nil && len(p) > 0 {
+		c.download.clientWrites.Add(1)
+	}
 	c.mu.Lock()
 	if len(p) > 0 {
 		c.startTime.CompareAndSwap(0, time.Now().UnixNano())
@@ -146,7 +150,16 @@ func (c *tlsLatencyConn) Write(p []byte) (int, error) {
 }
 
 func (c *tlsLatencyConn) Read(p []byte) (int, error) {
+	var started, ended time.Time
+	var writes uint64
+	if c.download != nil {
+		writes = c.download.clientWrites.Load()
+		started = time.Now()
+	}
 	n, err := c.Conn.Read(p)
+	if c.download != nil {
+		ended = time.Now()
+	}
 	c.mu.Lock()
 	appendTunnelPrefix(&c.serverPrefix, &c.serverN, p[:n])
 	if err != nil {
@@ -166,9 +179,13 @@ func (c *tlsLatencyConn) Read(p []byte) (int, error) {
 			valid = c.completeProgressLocked()
 		}
 	}
+	establishedTLS := tlsRequest && c.handshakeComplete
 	c.mu.Unlock()
 	if valid {
 		c.reportLatency()
+	}
+	if c.download != nil && establishedTLS {
+		c.download.observe(n, started, ended, writes)
 	}
 	return n, err
 }

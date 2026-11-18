@@ -100,7 +100,10 @@ func randomRoute(
 			if health.reliability > 0 {
 				tier = 4
 			}
-			if health.failed {
+			switch {
+			case health.failed:
+				tier = -2
+			case health.downloadImpaired:
 				tier = -1
 			}
 		}

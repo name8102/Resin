@@ -41,13 +41,14 @@ type tunnelPrepareResult struct {
 }
 
 type tunnelRelayResult struct {
-	upstreamFailure bool // attributable initial upstream failure, not client cancellation
-	ingressBytes    int64
-	egressBytes     int64
-	netOK           bool
-	proxyErr        *ProxyError
-	upstreamStage   string
-	upstreamErr     error
+	upstreamFailure     bool // attributable initial upstream failure, not client cancellation
+	downloadInterrupted bool // upstream read error after bulk TLS download progress
+	ingressBytes        int64
+	egressBytes         int64
+	netOK               bool
+	proxyErr            *ProxyError
+	upstreamStage       string
+	upstreamErr         error
 }
 
 type tunnelPumpOptions struct {
@@ -155,6 +156,8 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 		if result.upstreamFailure {
 			deps.router.ReportTargetFailure(routed.Route, target)
 			recordPassiveResult(deps.health, routed.Route, target, false)
+		} else if result.downloadInterrupted {
+			deps.router.ReportTargetDownloadImpairment(routed.Route, target)
 		}
 	}
 	if samplesPassiveTraffic(target) && deps.pool != nil {
@@ -176,6 +179,11 @@ func finishConnectTunnel(deps tunnelDeps, routed routedOutbound, rawConn net.Con
 			deps.health.RecordPassiveLatency(routed.Route.NodeHash, netutil.ExtractDomain(target), &latency)
 		}
 	})
+	if samplesPassiveTraffic(target) && deps.router != nil {
+		upstreamConn.download = &tunnelDownloadProgress{onSlow: func() {
+			deps.router.ReportTargetDownloadImpairment(routed.Route, target)
+		}}
+	}
 	return tunnelPrepareResult{route: routed.Route, session: &preparedTunnel{upstreamConn: upstreamConn, recordResult: recordResult}}
 }
 
@@ -329,6 +337,9 @@ func pumpPreparedTunnelReader(
 		result.upstreamFailure = invalidResponse || incompleteHandshake ||
 			(noResponse && firstEnded.Load() == 2 && (evidence.tlsRequest || opts.requireBidirectionalTraffic || !isBenignTunnelCopyError(evidence.readErr))) ||
 			(ingressResult.n == 0 && firstEnded.Load() == 1 && !isBenignTunnelCopyError(evidence.writeErr))
+		result.downloadInterrupted = observed.download != nil && evidence.tlsRequest && !evidence.handshakeIncomplete &&
+			firstEnded.Load() == 2 && !isBenignTunnelCopyError(evidence.readErr) &&
+			observed.download.recentlyTransferring(time.Now())
 		if incompleteHandshake && ingressResult.n > 0 && !invalidResponse {
 			result.netOK = false
 			result.proxyErr = ErrUpstreamRequestFailed

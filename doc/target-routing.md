@@ -83,6 +83,13 @@ Global probe health therefore remains separate from passive target failures.
   discard gaps over two seconds, and never treat total connection lifetime as
   download time. A missing metric remains unknown. HTTP bodies have per-request
   samples; shared HTTP connections retain their separate node-wide estimates.
+- After 256 KiB of TLS downstream data, two consecutive windows of at least five
+  seconds spent reading upstream at under 64 KiB/s demote that exact origin on
+  that node for two minutes. Interrupted bulk downloads with an attributable
+  upstream read error receive the same penalty. Quiet connections that do not
+  resume, normal EOF, and time spent writing to the client do not count. The
+  penalty applies only to new allocations: a demoted node remains a fallback,
+  existing leases and tunnels stay in place, and node-wide health is unchanged.
 - Every 32 initial route requests earn one exploration allocation, with at most
   two saved allocations per platform and exact origin. Retries neither earn nor
   spend credit. Exploration only selects ranked healthy candidates passing all

@@ -73,6 +73,43 @@ func TestPassiveThroughputWeightsWorkingCandidatesWithoutPinning(t *testing.T) {
 	}
 }
 
+func TestDownloadImpairmentDemotesOnlyNewAllocationsToExactOrigin(t *testing.T) {
+	const origin = "downloads.example:443"
+	r, pool, p, slow := targetTestRouter(t)
+	reportSelectedSuccess(t, r, p, slow, origin)
+	reportSelectedSuccess(t, r, p, slow, "other.example:443")
+	lease, err := r.RouteRequest(p.Name, "account", origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fast, entry := newRoutableEntry(t, `{"quality":"backup"}`, "203.0.113.2")
+	pool.addEntry(fast, entry)
+	pool.rebuildPlatformView(p)
+	r.ReportTargetDownloadImpairment(lease, origin)
+	// Early responses from the demoted node cannot clear download evidence.
+	r.ReportTargetSuccess(lease, origin)
+	for _, tc := range []struct {
+		account, target string
+		excluded        []node.Hash
+		want            node.Hash
+	}{
+		{target: origin, want: fast},
+		{target: "downloads.example:80", want: slow},
+		{target: "other.example:443", want: slow},
+		{target: origin, account: "account", want: slow},
+		{target: origin, excluded: []node.Hash{fast}, want: slow},
+	} {
+		got, err := r.RouteRequest(p.Name, tc.account, tc.target, tc.excluded...)
+		if err != nil || got.NodeHash != tc.want {
+			t.Fatalf("route to %q account=%q exclusions=%v: got %v, %v, want %v", tc.target, tc.account, tc.excluded, got.NodeHash, err, tc.want)
+		}
+	}
+	now := time.Now().Add(targetDownloadPenalty)
+	if r.routeTarget(p, origin, nil, now).evidence(slow).downloadImpaired {
+		t.Fatal("download penalty did not expire")
+	}
+}
+
 func TestRestoreTargetHistoryRespectsFailureOrderingAndStaleness(t *testing.T) {
 	r, _, p, h := targetTestRouter(t)
 	now := time.Now()
